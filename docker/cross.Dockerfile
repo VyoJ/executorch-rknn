@@ -28,9 +28,25 @@ RUN git clone --filter=blob:none --no-checkout https://github.com/LuckfoxTECH/lu
     && rm -rf /tmp/sdk \
     && /opt/toolchain/bin/${TOOLCHAIN}-gcc --version
 
+# RKNN runtime library, header and Rockchip's RV1106 demos, at the same commit
+# as the rknn-toolkit2 wheel in the aot image.
+ARG RKNN_TOOLKIT2_COMMIT=b25dadacc24b88eb7dfcaa47c9c525ecca89b319
+RUN git clone --filter=blob:none --no-checkout https://github.com/airockchip/rknn-toolkit2.git /tmp/rknn \
+    && cd /tmp/rknn \
+    && git sparse-checkout set --no-cone \
+        /rknpu2/runtime/Linux/librknn_api/include/ \
+        /rknpu2/runtime/Linux/librknn_api/armhf-uclibc/ \
+        /rknpu2/examples/RV1106_RV1103/rknn_mobilenet_demo/ \
+        /rknpu2/examples/3rdparty/stb/ \
+        /rknpu2/examples/3rdparty/fp16/ \
+    && git checkout "${RKNN_TOOLKIT2_COMMIT}" \
+    && mv rknpu2 /opt/rknpu2 \
+    && rm -rf /tmp/rknn
+
 ENV PATH="/opt/venv/bin:/opt/toolchain/bin:${PATH}" \
     LUCKFOX_TOOLCHAIN=/opt/toolchain \
-    LUCKFOX_TRIPLE=${TOOLCHAIN}
+    LUCKFOX_TRIPLE=${TOOLCHAIN} \
+    RKNPU2=/opt/rknpu2
 
 # Non-root user; UID/GID passed from the host by scripts/dk.
 ARG UID=1000
