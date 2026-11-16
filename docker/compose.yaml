@@ -1,0 +1,14 @@
+services:
+  cross:
+    build:
+      context: .
+      dockerfile: cross.Dockerfile
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    image: executorch-rknn/cross:dev
+    platform: linux/amd64
+    volumes:
+      - ..:/work
+    working_dir: /work
+    network_mode: none

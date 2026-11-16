@@ -1,0 +1,7 @@
+out/
+build/
+*.rknn
+*.pte
+*.onnx
+*.whl
+__pycache__/

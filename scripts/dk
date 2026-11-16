@@ -1,0 +1,10 @@
+#!/bin/sh
+# Run a command inside a project container.
+# usage: scripts/dk aot   python examples/export_mobilenet_v2.py
+#        scripts/dk cross scripts/build_runtime.sh
+set -e
+[ $# -ge 1 ] || { echo "usage: $0 <service> [command...]" >&2; exit 2; }
+svc="$1"; shift
+HOST_UID="$(id -u)"; HOST_GID="$(id -g)"; export HOST_UID HOST_GID
+here="$(cd "$(dirname "$0")/.." && pwd)"
+exec docker compose -f "$here/docker/compose.yaml" run --rm "$svc" "$@"

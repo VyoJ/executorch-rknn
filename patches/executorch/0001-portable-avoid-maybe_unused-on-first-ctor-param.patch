@@ -1,0 +1,15 @@
+diff --git a/kernels/portable/cpu/util/broadcast_indexes_range.h b/kernels/portable/cpu/util/broadcast_indexes_range.h
+index ae9970df65..293f91cc59 100644
+--- a/kernels/portable/cpu/util/broadcast_indexes_range.h
++++ b/kernels/portable/cpu/util/broadcast_indexes_range.h
+@@ -251,8 +251,8 @@ class BroadcastIndexesIterator<1, false> {
+   BroadcastIndexesIterator() = default;
+ 
+   explicit BroadcastIndexesIterator(
+-      [[maybe_unused]] const Tensor& output,
+-      [[maybe_unused]] const Tensor& input) {}
++      const Tensor& /* output */,
++      const Tensor& /* input */) {}
+ 
+   struct make_end_t {
+     explicit constexpr make_end_t() = default;
