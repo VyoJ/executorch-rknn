@@ -1,5 +1,23 @@
+x-common: &common
+  platform: linux/amd64
+  volumes:
+    - ..:/work
+  working_dir: /work
+  network_mode: none
+
 services:
+  aot:
+    <<: *common
+    build:
+      context: .
+      dockerfile: aot.Dockerfile
+      args:
+        UID: ${HOST_UID:-1000}
+        GID: ${HOST_GID:-1000}
+    image: executorch-rknn/aot:dev
+
   cross:
+    <<: *common
     build:
       context: .
       dockerfile: cross.Dockerfile
@@ -7,8 +25,3 @@ services:
         UID: ${HOST_UID:-1000}
         GID: ${HOST_GID:-1000}
     image: executorch-rknn/cross:dev
-    platform: linux/amd64
-    volumes:
-      - ..:/work
-    working_dir: /work
-    network_mode: none
