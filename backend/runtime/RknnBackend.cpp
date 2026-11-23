@@ -28,6 +28,7 @@ using executorch::ET_RUNTIME_NAMESPACE::CompileSpec;
 using executorch::ET_RUNTIME_NAMESPACE::DelegateHandle;
 using executorch::runtime::ArrayRef;
 using executorch::runtime::Error;
+using executorch::runtime::MemoryAllocator;
 using executorch::runtime::EValue;
 using executorch::runtime::FreeableBuffer;
 using executorch::runtime::Result;
@@ -40,6 +41,7 @@ struct IoTensor {
   BlobTensor logical;      // what ExecuTorch sees (NCHW for 4-D)
   rknn_tensor_attr attr;   // what the NPU memory holds
   rknn_tensor_mem* mem;
+  int8_t* tile;            // C2 x W scratch for NC1HWC2 int8 tensors, else null
 };
 
 struct RknnHandle {
@@ -64,9 +66,16 @@ Error write_input(const IoTensor& t, const float* src) {
   const float inv_scale = 1.0f / t.attr.scale;
   const int32_t zp = t.attr.zp;
   const BlobTensor& l = t.logical;
-  if (t.attr.type == RKNN_TENSOR_INT8 && t.attr.fmt == RKNN_TENSOR_NHWC && l.ndim == 4) {
+  const rknn_tensor_attr& a = t.attr;
+  if (a.type == RKNN_TENSOR_INT8 && a.fmt == RKNN_TENSOR_NHWC && l.ndim == 4) {
     quantize_nchw_to_nhwc_s8(src, static_cast<int8_t*>(dst), l.dims[0], l.dims[1], l.dims[2], l.dims[3],
-                             t.attr.w_stride ? t.attr.w_stride : l.dims[3], inv_scale, zp);
+                             a.w_stride ? a.w_stride : l.dims[3], inv_scale, zp);
+    return Error::Ok;
+  }
+  if (t.tile) {
+    quantize_nchw_to_nc1hwc2_s8(src, static_cast<int8_t*>(dst), l.dims[0], l.dims[1], l.dims[2], l.dims[3],
+                                a.dims[1], a.dims[4], static_cast<size_t>(a.dims[2]) * a.dims[3],
+                                a.w_stride ? a.w_stride : l.dims[3], inv_scale, zp, t.tile);
     return Error::Ok;
   }
   switch (t.attr.type) {
@@ -90,6 +99,14 @@ Error read_output(const IoTensor& t, float* dst) {
   const void* src = t.mem->virt_addr;
   const float scale = t.attr.scale;
   const int32_t zp = t.attr.zp;
+  if (t.tile) {
+    const BlobTensor& l = t.logical;
+    const rknn_tensor_attr& a = t.attr;
+    dequantize_nc1hwc2_to_nchw_s8(static_cast<const int8_t*>(src), dst, l.dims[0], l.dims[1], l.dims[2],
+                                  l.dims[3], a.dims[1], a.dims[4], static_cast<size_t>(a.dims[2]) * a.dims[3],
+                                  a.w_stride ? a.w_stride : l.dims[3], scale, zp, t.tile);
+    return Error::Ok;
+  }
   switch (t.attr.type) {
     case RKNN_TENSOR_INT8:
       return for_each_element(t, [&](size_t i, size_t j) {
@@ -116,10 +133,10 @@ void release(RknnHandle* h) {
   h->ctx = 0;
 }
 
-Error bind(RknnHandle* h, IoTensor& t, uint32_t index, bool is_input) {
+Error bind(RknnHandle* h, IoTensor& t, uint32_t index, bool is_input, MemoryAllocator* allocator) {
   std::memset(&t.attr, 0, sizeof(t.attr));
   t.attr.index = index;
-  // Inputs use the logical attributes, which RV1106 reports as NHWC for 4-D.
+  // Inputs use the logical attributes: NHWC for 4-D on RV1106, or NC1HWC2.
   // Outputs use the native ones; the runtime does not convert outputs.
   const rknn_query_cmd cmd = is_input ? RKNN_QUERY_INPUT_ATTR : RKNN_QUERY_NATIVE_OUTPUT_ATTR;
   ET_CHECK_OR_RETURN_ERROR(rknn_query(h->ctx, cmd, &t.attr, sizeof(t.attr)) == RKNN_SUCC, Internal,
@@ -132,9 +149,19 @@ Error bind(RknnHandle* h, IoTensor& t, uint32_t index, bool is_input) {
   const rknn_query_cmd logical_cmd = is_input ? RKNN_QUERY_INPUT_ATTR : RKNN_QUERY_OUTPUT_ATTR;
   ET_CHECK_OR_RETURN_ERROR(rknn_query(h->ctx, logical_cmd, &logical, sizeof(logical)) == RKNN_SUCC, Internal,
                            "RknnBackend: querying %s %u failed", is_input ? "input" : "output", index);
-  ET_CHECK_OR_RETURN_ERROR(logical.n_elems == t.logical.numel(), InvalidProgram,
-                           "RknnBackend: %s %u has %u elements in the model, %zu in the program",
-                           is_input ? "input" : "output", index, logical.n_elems, t.logical.numel());
+  // Every layout must map the program's shape. An NC1HWC2 input (RV1106 uses
+  // it unless there are 1, 3 or 4 channels) is reported padded even in the
+  // logical attributes, so its element count cannot be compared.
+  ET_CHECK_OK_OR_RETURN_ERROR(for_each_element(t, [](size_t, size_t) {}));
+  if (logical.fmt != RKNN_TENSOR_NC1HWC2) {
+    ET_CHECK_OR_RETURN_ERROR(logical.n_elems == t.logical.numel(), InvalidProgram,
+                             "RknnBackend: %s %u has %u elements in the model, %zu in the program",
+                             is_input ? "input" : "output", index, logical.n_elems, t.logical.numel());
+  }
+  if (t.attr.type == RKNN_TENSOR_INT8 && t.attr.fmt == RKNN_TENSOR_NC1HWC2) {
+    t.tile = allocator->allocateList<int8_t>(static_cast<size_t>(t.attr.dims[4]) * t.logical.dims[3]);
+    ET_CHECK_OR_RETURN_ERROR(t.tile != nullptr, MemoryAllocationFailed, "RknnBackend: tile");
+  }
   t.mem = rknn_create_mem(h->ctx, t.attr.size_with_stride);
   ET_CHECK_OR_RETURN_ERROR(t.mem != nullptr, MemoryAllocationFailed, "RknnBackend: rknn_create_mem failed");
   // Zero the input's row padding once; execute() flushes inputs after writing
@@ -195,12 +222,12 @@ class RknnBackend final : public BackendInterface {
     for (uint32_t i = 0; err == Error::Ok && i < blob.n_inputs; ++i) {
       h->inputs[i].logical = blob.input(i);
       h->n_inputs = i + 1;
-      err = bind(h, h->inputs[i], i, true);
+      err = bind(h, h->inputs[i], i, true, allocator);
     }
     for (uint32_t i = 0; err == Error::Ok && i < blob.n_outputs; ++i) {
       h->outputs[i].logical = blob.output(i);
       h->n_outputs = i + 1;
-      err = bind(h, h->outputs[i], i, false);
+      err = bind(h, h->outputs[i], i, false, allocator);
     }
     if (err != Error::Ok) {
       release(h);

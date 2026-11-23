@@ -42,7 +42,7 @@ def to_rknn(model, options):
         result = subprocess.run(
             [RKNN_PYTHON, str(_CONVERT_SCRIPT), str(tmp / "model.onnx"), str(tmp / "model.rknn"),
              str(tmp / "options.json")],
-            capture_output=True, text=True)
+            capture_output=True, text=True, cwd=tmp)  # the toolkit drops files in its working directory
         if result.returncode != 0:
             raise RuntimeError(f"RKNN conversion failed:\n{result.stdout}\n{result.stderr}")
         if options.dump_dir:

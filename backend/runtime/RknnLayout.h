@@ -2,7 +2,8 @@
 // layout of an RKNN tensor in NPU memory.
 //
 // Layouts seen on RV1106:
-//   inputs   NHWC, rows padded to w_stride (width 29 -> 32 with 3 channels)
+//   inputs   NHWC, rows padded to w_stride (width 29 -> 32 with 3 channels);
+//            NC1HWC2 unless there are 1, 3 or 4 channels
 //   outputs  NC1HWC2 for 4-D: channels in blocks of C2, padded up; H and W may
 //            be reported flattened and padded, e.g. 15x14 as [1, 212]
 //            (dims [N, C1, 1, 212, C2]); rows are w_stride apart

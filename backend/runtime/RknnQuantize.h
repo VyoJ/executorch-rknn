@@ -1,4 +1,5 @@
-// float -> int8/uint8 affine quantisation: clamp(round_half_even(v / scale) + zp).
+// float <-> int8 affine quantisation, q = clamp(round_half_even(v / scale) + zp),
+// fused with the layout change between ExecuTorch (NCHW) and the NPU.
 #pragma once
 
 #include <algorithm>
@@ -94,6 +95,122 @@ inline void quantize_nchw_to_nhwc_s8(const float* src, int8_t* dst, uint32_t N, 
     for (uint32_t h = 0; h < H; ++h)
       quantize_row_s8(src + (static_cast<size_t>(n) * C * H + h) * W, channel_step,
                       dst + (static_cast<size_t>(n) * H + h) * w_stride * C, C, W, inv_scale, zp);
+}
+
+#if defined(__ARM_NEON)
+// Transposes an 8x8 block of bytes held as 8 rows.
+inline void transpose8x8(int8x8_t r[8]) {
+  const int8x8x2_t t01 = vtrn_s8(r[0], r[1]), t23 = vtrn_s8(r[2], r[3]);
+  const int8x8x2_t t45 = vtrn_s8(r[4], r[5]), t67 = vtrn_s8(r[6], r[7]);
+  const int16x4x2_t u0 = vtrn_s16(vreinterpret_s16_s8(t01.val[0]), vreinterpret_s16_s8(t23.val[0]));
+  const int16x4x2_t u1 = vtrn_s16(vreinterpret_s16_s8(t01.val[1]), vreinterpret_s16_s8(t23.val[1]));
+  const int16x4x2_t u2 = vtrn_s16(vreinterpret_s16_s8(t45.val[0]), vreinterpret_s16_s8(t67.val[0]));
+  const int16x4x2_t u3 = vtrn_s16(vreinterpret_s16_s8(t45.val[1]), vreinterpret_s16_s8(t67.val[1]));
+  const int32x2x2_t v0 = vtrn_s32(vreinterpret_s32_s16(u0.val[0]), vreinterpret_s32_s16(u2.val[0]));
+  const int32x2x2_t v1 = vtrn_s32(vreinterpret_s32_s16(u1.val[0]), vreinterpret_s32_s16(u3.val[0]));
+  const int32x2x2_t v2 = vtrn_s32(vreinterpret_s32_s16(u0.val[1]), vreinterpret_s32_s16(u2.val[1]));
+  const int32x2x2_t v3 = vtrn_s32(vreinterpret_s32_s16(u1.val[1]), vreinterpret_s32_s16(u3.val[1]));
+  r[0] = vreinterpret_s8_s32(v0.val[0]);
+  r[1] = vreinterpret_s8_s32(v1.val[0]);
+  r[2] = vreinterpret_s8_s32(v2.val[0]);
+  r[3] = vreinterpret_s8_s32(v3.val[0]);
+  r[4] = vreinterpret_s8_s32(v0.val[1]);
+  r[5] = vreinterpret_s8_s32(v1.val[1]);
+  r[6] = vreinterpret_s8_s32(v2.val[1]);
+  r[7] = vreinterpret_s8_s32(v3.val[1]);
+}
+#endif
+
+// tile[l * W + w] -> out[w * C2 + l] for lanes l < lanes.
+inline void interleave_lanes(const int8_t* tile, int8_t* out, uint32_t lanes, uint32_t W, uint32_t C2) {
+  uint32_t l = 0;
+#if defined(__ARM_NEON)
+  for (; l + 8 <= lanes; l += 8) {
+    uint32_t w = 0;
+    for (; w + 8 <= W; w += 8) {
+      int8x8_t r[8];
+      for (int i = 0; i < 8; ++i) r[i] = vld1_s8(tile + (l + i) * W + w);
+      transpose8x8(r);
+      for (int i = 0; i < 8; ++i) vst1_s8(out + (w + i) * C2 + l, r[i]);
+    }
+    for (; w < W; ++w)
+      for (uint32_t i = 0; i < 8; ++i) out[w * C2 + l + i] = tile[(l + i) * W + w];
+  }
+#endif
+  for (; l < lanes; ++l)
+    for (uint32_t w = 0; w < W; ++w) out[w * C2 + l] = tile[l * W + w];
+}
+
+// in[w * C2 + l] -> tile[l * W + w] for lanes l < lanes.
+inline void deinterleave_lanes(const int8_t* in, int8_t* tile, uint32_t lanes, uint32_t W, uint32_t C2) {
+  uint32_t l = 0;
+#if defined(__ARM_NEON)
+  for (; l + 8 <= lanes; l += 8) {
+    uint32_t w = 0;
+    for (; w + 8 <= W; w += 8) {
+      int8x8_t r[8];
+      for (int i = 0; i < 8; ++i) r[i] = vld1_s8(in + (w + i) * C2 + l);
+      transpose8x8(r);
+      for (int i = 0; i < 8; ++i) vst1_s8(tile + (l + i) * W + w, r[i]);
+    }
+    for (; w < W; ++w)
+      for (uint32_t i = 0; i < 8; ++i) tile[(l + i) * W + w] = in[w * C2 + l + i];
+  }
+#endif
+  for (; l < lanes; ++l)
+    for (uint32_t w = 0; w < W; ++w) tile[l * W + w] = in[w * C2 + l];
+}
+
+// NCHW float -> NC1HWC2 int8: channel c at block c / C2, lane c % C2; each
+// block holds `plane` positions with rows w_stride apart. tile holds C2 * W
+// bytes: one row of a block is quantised into it channel by channel, then
+// interleaved into the block. Padding is left as is.
+inline void quantize_nchw_to_nc1hwc2_s8(const float* src, int8_t* dst, uint32_t N, uint32_t C, uint32_t H,
+                                        uint32_t W, uint32_t C1, uint32_t C2, size_t plane, size_t w_stride,
+                                        float inv_scale, int32_t zp, int8_t* tile) {
+  for (uint32_t n = 0; n < N; ++n)
+    for (uint32_t c1 = 0; c1 < C1 && c1 * C2 < C; ++c1) {
+      const uint32_t lanes = std::min(C2, C - c1 * C2);
+      for (uint32_t h = 0; h < H; ++h) {
+        for (uint32_t l = 0; l < lanes; ++l)
+          quantize_row_s8(src + ((static_cast<size_t>(n) * C + c1 * C2 + l) * H + h) * W, 0, tile + l * W, 1, W,
+                          inv_scale, zp);
+        interleave_lanes(tile, dst + ((static_cast<size_t>(n) * C1 + c1) * plane + h * w_stride) * C2, lanes, W,
+                         C2);
+      }
+    }
+}
+
+// One row of int8 -> float: (q - zp) * scale.
+inline void dequantize_row_s8(const int8_t* src, float* dst, uint32_t W, float scale, int32_t zp) {
+  uint32_t w = 0;
+#if defined(__ARM_NEON)
+  const float32x4_t s = vdupq_n_f32(scale);
+  const int16x8_t z = vdupq_n_s16(static_cast<int16_t>(zp));
+  for (; w + 8 <= W; w += 8) {
+    const int16x8_t q = vsubq_s16(vmovl_s8(vld1_s8(src + w)), z);
+    vst1q_f32(dst + w, vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_low_s16(q))), s));
+    vst1q_f32(dst + w + 4, vmulq_f32(vcvtq_f32_s32(vmovl_s16(vget_high_s16(q))), s));
+  }
+#endif
+  for (; w < W; ++w) dst[w] = static_cast<float>(src[w] - zp) * scale;
+}
+
+// NC1HWC2 int8 -> NCHW float; the inverse of quantize_nchw_to_nc1hwc2_s8.
+inline void dequantize_nc1hwc2_to_nchw_s8(const int8_t* src, float* dst, uint32_t N, uint32_t C, uint32_t H,
+                                          uint32_t W, uint32_t C1, uint32_t C2, size_t plane, size_t w_stride,
+                                          float scale, int32_t zp, int8_t* tile) {
+  for (uint32_t n = 0; n < N; ++n)
+    for (uint32_t c1 = 0; c1 < C1 && c1 * C2 < C; ++c1) {
+      const uint32_t lanes = std::min(C2, C - c1 * C2);
+      for (uint32_t h = 0; h < H; ++h) {
+        deinterleave_lanes(src + ((static_cast<size_t>(n) * C1 + c1) * plane + h * w_stride) * C2, tile, lanes, W,
+                           C2);
+        for (uint32_t l = 0; l < lanes; ++l)
+          dequantize_row_s8(tile + l * W, dst + ((static_cast<size_t>(n) * C + c1 * C2 + l) * H + h) * W, W,
+                            scale, zp);
+      }
+    }
 }
 
 }  // namespace executorch_rknn
