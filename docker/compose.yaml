@@ -15,6 +15,8 @@ services:
         UID: ${HOST_UID:-1000}
         GID: ${HOST_GID:-1000}
     image: executorch-rknn/aot:dev
+    environment:
+      PYTHONPATH: /work/backend/python
 
   cross:
     <<: *common

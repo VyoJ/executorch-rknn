@@ -22,4 +22,15 @@ tests/device/run_portable_models.sh                   # board, over adb
 scripts/dk aot python tests/device/compare_outputs.py
 ```
 
+MobileNetV2 through the RKNN delegate (ahead-of-time side; the board runs the
+`.rknn` inside the `.pte` with `rknn_bench` until the runtime delegate exists):
+
+```
+scripts/dk aot python -m pytest -q tests/aot
+scripts/dk aot python examples/export_mobilenet_v2.py --check-per-class 10
+scripts/dk cross scripts/build_rknn_bench.sh
+tests/device/run_rknn_model.sh out/mv2_rknn          # board, over adb
+scripts/dk aot python tests/device/compare_rknn_outputs.py out/mv2_rknn
+```
+
 Plain RKNN baseline: see `docs/baseline.md`.
