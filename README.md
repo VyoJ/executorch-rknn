@@ -22,15 +22,19 @@ tests/device/run_portable_models.sh                   # board, over adb
 scripts/dk aot python tests/device/compare_outputs.py
 ```
 
-MobileNetV2 through the RKNN delegate (ahead-of-time side; the board runs the
-`.rknn` inside the `.pte` with `rknn_bench` until the runtime delegate exists):
+MobileNetV2 through the RKNN delegate:
 
 ```
 scripts/dk aot python -m pytest -q tests/aot
 scripts/dk aot python examples/export_mobilenet_v2.py --check-per-class 10
-scripts/dk cross scripts/build_rknn_bench.sh
-tests/device/run_rknn_model.sh out/mv2_rknn          # board, over adb
+scripts/dk cross scripts/build_rknn_runner.sh        # executor_runner + RknnBackend
+tests/device/run_rknn_pte.sh out/mv2_rknn.pte out/mv2_rknn   # board, over adb
 scripts/dk aot python tests/device/compare_rknn_outputs.py out/mv2_rknn
 ```
+
+To run a bare `.rknn` (the one the delegate built is kept in `out/mv2_rknn/`):
+`scripts/dk cross scripts/build_rknn_bench.sh`, then
+`tests/device/run_rknn_model.sh out/mv2_rknn` and add `--outputs board` to the
+comparison.
 
 Plain RKNN baseline: see `docs/baseline.md`.

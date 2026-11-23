@@ -5,8 +5,8 @@ Runs in the ExecuTorch venv. Writes:
   out/mv2_rknn.pte           the program
   out/mv2_rknn/model.onnx    what the delegate handed to rknn-toolkit2
   out/mv2_rknn/model.rknn    the .rknn inside the .pte, for running on the board
-  out/mv2_rknn/inputs/*.bin  check images, NHWC float32, normalised
-  out/mv2_rknn/reference.npz labels and float and PT2E logits for those images
+  out/mv2_rknn/inputs/*.bin  check images, NCHW float32, normalised (the .pte's input)
+  out/mv2_rknn/reference.npz labels, float and PT2E logits for those images
 """
 
 import argparse
@@ -93,13 +93,12 @@ def main():
     labels, float_logits, pt2e_logits = [], [], []
     with torch.no_grad():
         for i, (label, x) in enumerate(images("val", args.check_per_class)):
-            # RKNN's input on RV1106 is NHWC.
-            x.permute(0, 2, 3, 1).contiguous().numpy().tofile(inputs_dir / f"{i:03d}.bin")
+            x.numpy().tofile(inputs_dir / f"{i:03d}.bin")
             labels.append(label)
             float_logits.append(model(x)[0].numpy())
             pt2e_logits.append(quantized(x)[0].numpy())
     np.savez(args.work / "reference.npz", labels=np.array(labels),
-             float_logits=np.stack(float_logits), pt2e_logits=np.stack(pt2e_logits))
+             float=np.stack(float_logits), pt2e=np.stack(pt2e_logits))
     print(f"wrote {len(labels)} check inputs to {inputs_dir}")
 
 

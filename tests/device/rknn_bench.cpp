@@ -2,8 +2,9 @@
 //
 // usage: rknn_bench model.rknn loops input-0.bin [input-1.bin ...]
 //
-// Inputs are float32 in the model's logical layout; they are quantised with the
-// scale and zero point the model reports. Outputs are dequantised and written to
+// Inputs are float32 in ExecuTorch's layout (NCHW for 4-D, transposed here to
+// the NHWC the model reports); they are quantised with the scale and zero point
+// the model reports. Outputs are dequantised and written to
 // output-<i>.bin as float32. Prints tensor attributes, NPU memory and timing.
 
 #include <algorithm>
@@ -18,6 +19,7 @@
 #include <string>
 #include <vector>
 
+#include "RknnLayout.h"
 #include "rknn_api.h"
 
 namespace {
@@ -51,6 +53,12 @@ float from_fp16(uint16_t h) {
   return f;
 }
 
+// The tensor's dims as ExecuTorch orders them: NCHW for a 4-D NHWC attribute.
+std::vector<uint32_t> executorch_dims(const rknn_tensor_attr& a) {
+  if (a.n_dims == 4 && a.fmt == RKNN_TENSOR_NHWC) return {a.dims[0], a.dims[3], a.dims[1], a.dims[2]};
+  return std::vector<uint32_t>(a.dims, a.dims + a.n_dims);
+}
+
 template <typename T>
 T quantize(float v, const rknn_tensor_attr& a) {
   float q = std::nearbyint(v / a.scale) + a.zp;
@@ -58,21 +66,18 @@ T quantize(float v, const rknn_tensor_attr& a) {
   return static_cast<T>(q);
 }
 
-bool write_input(const rknn_tensor_attr& a, const std::vector<float>& src, void* dst) {
-  for (uint32_t i = 0; i < a.n_elems; ++i) {
-    switch (a.type) {
-      case RKNN_TENSOR_INT8: static_cast<int8_t*>(dst)[i] = quantize<int8_t>(src[i], a); break;
-      case RKNN_TENSOR_UINT8: static_cast<uint8_t*>(dst)[i] = quantize<uint8_t>(src[i], a); break;
-      case RKNN_TENSOR_INT16: static_cast<int16_t*>(dst)[i] = quantize<int16_t>(src[i], a); break;
-      case RKNN_TENSOR_FLOAT16: static_cast<uint16_t*>(dst)[i] = to_fp16(src[i]); break;
-      case RKNN_TENSOR_FLOAT32: static_cast<float*>(dst)[i] = src[i]; break;
-      default: return false;
-    }
+void write_input(const rknn_tensor_attr& a, float v, void* dst, size_t j) {
+  switch (a.type) {
+    case RKNN_TENSOR_INT8: static_cast<int8_t*>(dst)[j] = quantize<int8_t>(v, a); break;
+    case RKNN_TENSOR_UINT8: static_cast<uint8_t*>(dst)[j] = quantize<uint8_t>(v, a); break;
+    case RKNN_TENSOR_INT16: static_cast<int16_t*>(dst)[j] = quantize<int16_t>(v, a); break;
+    case RKNN_TENSOR_FLOAT16: static_cast<uint16_t*>(dst)[j] = to_fp16(v); break;
+    case RKNN_TENSOR_FLOAT32: static_cast<float*>(dst)[j] = v; break;
+    default: break;
   }
-  return true;
 }
 
-float read_output(const rknn_tensor_attr& a, const void* src, uint32_t i) {
+float read_output(const rknn_tensor_attr& a, const void* src, size_t i) {
   switch (a.type) {
     case RKNN_TENSOR_INT8: return (static_cast<const int8_t*>(src)[i] - a.zp) * a.scale;
     case RKNN_TENSOR_UINT8: return (static_cast<const uint8_t*>(src)[i] - a.zp) * a.scale;
@@ -86,9 +91,9 @@ float read_output(const rknn_tensor_attr& a, const void* src, uint32_t i) {
 void print_attr(const char* kind, const rknn_tensor_attr& a) {
   std::string dims;
   for (uint32_t d = 0; d < a.n_dims; ++d) dims += (d ? "x" : "") + std::to_string(a.dims[d]);
-  std::printf("%s %u %s [%s] %s %s %s zp=%d scale=%g fl=%d size=%u stride_size=%u\n", kind, a.index,
-              a.name, dims.c_str(), get_format_string(a.fmt), get_type_string(a.type),
-              get_qnt_type_string(a.qnt_type), a.zp, a.scale, a.fl, a.size, a.size_with_stride);
+  std::printf("%s %u %s [%s] %s %s %s zp=%d scale=%g fl=%d size=%u stride_size=%u w_stride=%u\n", kind,
+              a.index, a.name, dims.c_str(), get_format_string(a.fmt), get_type_string(a.type),
+              get_qnt_type_string(a.qnt_type), a.zp, a.scale, a.fl, a.size, a.size_with_stride, a.w_stride);
 }
 
 }  // namespace
@@ -117,7 +122,7 @@ int main(int argc, char** argv) {
   std::printf("mem weight=%u internal=%u dma_total=%llu (bytes)\n", mem.total_weight_size,
               mem.total_internal_size, static_cast<unsigned long long>(mem.total_dma_allocated_size));
 
-  std::vector<rknn_tensor_attr> in(io.n_input), out(io.n_output);
+  std::vector<rknn_tensor_attr> in(io.n_input), out(io.n_output), native_out(io.n_output);
   std::vector<rknn_tensor_mem*> in_mem(io.n_input), out_mem(io.n_output);
   for (uint32_t i = 0; i < io.n_input; ++i) {
     in[i].index = i;
@@ -132,18 +137,18 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "input %u: expected %u floats, file has %zu bytes\n", i, in[i].n_elems, data.size());
       return 2;
     }
-    if (in[i].size_with_stride != in[i].size) {
-      std::fprintf(stderr, "input %u: strided layout not handled\n", i);
-      return 2;
-    }
     std::vector<float> values(in[i].n_elems);
     std::memcpy(values.data(), data.data(), data.size());
     in_mem[i] = rknn_create_mem(ctx, in[i].size_with_stride);
+    std::memset(in_mem[i]->virt_addr, 0, in[i].size_with_stride);
     // The data is already in the model's input type; without pass_through the
     // runtime converts it again.
     in[i].pass_through = 1;
-    if (!write_input(in[i], values, in_mem[i]->virt_addr)) {
-      std::fprintf(stderr, "input %u: unsupported type\n", i);
+    const auto dims = executorch_dims(in[i]);
+    if (!executorch_rknn::for_each_element(in[i], dims.data(), dims.size(), [&](size_t k, size_t j) {
+          write_input(in[i], values[k], in_mem[i]->virt_addr, j);
+        })) {
+      std::fprintf(stderr, "input %u: layout not handled\n", i);
       return 2;
     }
     if (int r = rknn_set_io_mem(ctx, in_mem[i], &in[i]); r != RKNN_SUCC) {
@@ -155,12 +160,12 @@ int main(int argc, char** argv) {
     out[i].index = i;
     rknn_query(ctx, RKNN_QUERY_OUTPUT_ATTR, &out[i], sizeof(out[i]));
     print_attr("output", out[i]);
-    rknn_tensor_attr native{};
-    native.index = i;
-    rknn_query(ctx, RKNN_QUERY_NATIVE_OUTPUT_ATTR, &native, sizeof(native));
-    print_attr("native-output", native);
-    out_mem[i] = rknn_create_mem(ctx, out[i].size_with_stride);
-    if (int r = rknn_set_io_mem(ctx, out_mem[i], &out[i]); r != RKNN_SUCC) {
+    // Outputs are bound in their native layout; the runtime does not convert 4-D ones.
+    native_out[i].index = i;
+    rknn_query(ctx, RKNN_QUERY_NATIVE_OUTPUT_ATTR, &native_out[i], sizeof(native_out[i]));
+    print_attr("native-output", native_out[i]);
+    out_mem[i] = rknn_create_mem(ctx, native_out[i].size_with_stride);
+    if (int r = rknn_set_io_mem(ctx, out_mem[i], &native_out[i]); r != RKNN_SUCC) {
       std::fprintf(stderr, "set output %u failed: %d\n", i, r);
       return 1;
     }
@@ -185,7 +190,10 @@ int main(int argc, char** argv) {
 
   for (uint32_t i = 0; i < io.n_output; ++i) {
     std::vector<float> values(out[i].n_elems);
-    for (uint32_t j = 0; j < out[i].n_elems; ++j) values[j] = read_output(out[i], out_mem[i]->virt_addr, j);
+    const auto dims = executorch_dims(out[i]);
+    executorch_rknn::for_each_element(native_out[i], dims.data(), dims.size(), [&](size_t k, size_t j) {
+      values[k] = read_output(native_out[i], out_mem[i]->virt_addr, j);
+    });
     std::ofstream f("output-" + std::to_string(i) + ".bin", std::ios::binary);
     f.write(reinterpret_cast<const char*>(values.data()), values.size() * sizeof(float));
   }
