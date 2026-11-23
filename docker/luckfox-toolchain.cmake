@@ -1,7 +1,7 @@
 # CMake toolchain file for Luckfox Pico (RV1103/RV1106): Cortex-A7, NEON-VFPv4, uClibc.
 # Used inside the `cross` container, where LUCKFOX_TOOLCHAIN and LUCKFOX_TRIPLE are set.
 set(CMAKE_SYSTEM_NAME Linux)
-set(CMAKE_SYSTEM_PROCESSOR armv7l)
+set(CMAKE_SYSTEM_PROCESSOR armv7)
 
 if(DEFINED ENV{LUCKFOX_TOOLCHAIN})
   set(LUCKFOX_TOOLCHAIN $ENV{LUCKFOX_TOOLCHAIN})

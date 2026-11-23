@@ -18,3 +18,9 @@
 | executorch (aot) | 1.6.0 wheel from PyPI, cp311, same commit as the submodule | `docker/aot.Dockerfile` |
 | torchvision / torchao (aot) | 0.29.2+cpu / 0.18.0+cpu | `docker/aot.Dockerfile` |
 | Python | 3.11 (Debian bookworm) | base image |
+| transformers (aot) | 5.0.0rc1, the version optimum-executorch 1.1.0 pins | `docker/aot.Dockerfile` |
+| optimum-executorch / optimum / accelerate (aot) | 1.1.0 / 2.0.0 / 1.16.0, installed `--no-deps` | `docker/aot.Dockerfile` |
+| soundfile (aot) | 0.14.0 | `docker/aot.Dockerfile` |
+| SmolLM2-135M | `HuggingFaceTB/SmolLM2-135M` at `93efa2f097d58c2a74874c7e644dbc9b0cee75a2`, safetensors sha256 `80521b40…d55da1` | `docker/aot.Dockerfile` |
+| whisper-tiny | `openai/whisper-tiny` at `169d4a4341b33bc18d8881c4b69c2e104e1cc0af`, safetensors sha256 `7ebd0e69…2ea2395` | `docker/aot.Dockerfile` |
+| jfk.flac | `openai/whisper` at `86098128c0b4f24f0e2aa2994de830614b474227`, sha256 `63a4b1e4…949715` | `docker/aot.Dockerfile` |
