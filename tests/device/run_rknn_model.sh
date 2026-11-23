@@ -32,4 +32,4 @@ done
 first="$(ls "$dir"/inputs/*.bin | head -1)"
 adb push -q "$first" "$remote/input-0.bin"
 adb shell "cd $remote && ./rknn_bench model.rknn 100 input-0.bin" > "$dir/board/timing.log" 2>&1
-grep -E '^(input|output|mem|run) ' "$dir/board/timing.log" | tr -d '\r'
+grep -E '^(input|output|mem|run|float-in) ' "$dir/board/timing.log" | tr -d '\r'

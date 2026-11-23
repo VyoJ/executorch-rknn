@@ -5,11 +5,8 @@
 // for 4-D). execute() quantises inputs into the NPU's own layout and type, and
 // dequantises outputs back.
 
-#include <algorithm>
-#include <cmath>
 #include <cstdint>
 #include <cstring>
-#include <limits>
 
 #include <executorch/runtime/backend/interface.h>
 #include <executorch/runtime/core/error.h>
@@ -18,6 +15,7 @@
 
 #include "RknnBlob.h"
 #include "RknnLayout.h"
+#include "RknnQuantize.h"
 #include "rknn_api.h"
 
 using executorch::aten::ScalarType;
@@ -52,13 +50,6 @@ struct RknnHandle {
   IoTensor* outputs;
 };
 
-template <typename T>
-T quantize(float v, float inv_scale, int32_t zp) {
-  float q = std::nearbyint(v * inv_scale) + static_cast<float>(zp);
-  q = std::min<float>(std::max<float>(q, std::numeric_limits<T>::min()), std::numeric_limits<T>::max());
-  return static_cast<T>(q);
-}
-
 // Calls fn(logical_index, npu_index) for every element of t.
 template <typename Fn>
 Error for_each_element(const IoTensor& t, Fn fn) {
@@ -72,6 +63,12 @@ Error write_input(const IoTensor& t, const float* src) {
   void* dst = t.mem->virt_addr;
   const float inv_scale = 1.0f / t.attr.scale;
   const int32_t zp = t.attr.zp;
+  const BlobTensor& l = t.logical;
+  if (t.attr.type == RKNN_TENSOR_INT8 && t.attr.fmt == RKNN_TENSOR_NHWC && l.ndim == 4) {
+    quantize_nchw_to_nhwc_s8(src, static_cast<int8_t*>(dst), l.dims[0], l.dims[1], l.dims[2], l.dims[3],
+                             t.attr.w_stride ? t.attr.w_stride : l.dims[3], inv_scale, zp);
+    return Error::Ok;
+  }
   switch (t.attr.type) {
     case RKNN_TENSOR_INT8:
       return for_each_element(t, [&](size_t i, size_t j) {
@@ -140,6 +137,10 @@ Error bind(RknnHandle* h, IoTensor& t, uint32_t index, bool is_input) {
                            is_input ? "input" : "output", index, logical.n_elems, t.logical.numel());
   t.mem = rknn_create_mem(h->ctx, t.attr.size_with_stride);
   ET_CHECK_OR_RETURN_ERROR(t.mem != nullptr, MemoryAllocationFailed, "RknnBackend: rknn_create_mem failed");
+  // Zero the input's row padding once; execute() flushes inputs after writing
+  // them. Do not write output memory from the CPU: zeroing it here corrupted
+  // the NPU's results, even with the sync after rknn_run (cached lines).
+  if (is_input) std::memset(t.mem->virt_addr, 0, t.attr.size_with_stride);
   // execute() writes data already in the model's type and layout; without
   // pass_through the runtime converts it again.
   if (is_input) t.attr.pass_through = 1;

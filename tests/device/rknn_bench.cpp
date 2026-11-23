@@ -5,7 +5,9 @@
 // Inputs are float32 in ExecuTorch's layout (NCHW for 4-D, transposed here to
 // the NHWC the model reports); they are quantised with the scale and zero point
 // the model reports. Outputs are dequantised and written to
-// output-<i>.bin as float32. Prints tensor attributes, NPU memory and timing.
+// output-<i>.bin as float32. Prints tensor attributes, NPU memory and timing:
+// `run` is rknn_run alone; `float-in` adds quantising the float input each
+// time, as an application with float input would (the delegate's work).
 
 #include <algorithm>
 #include <chrono>
@@ -20,6 +22,7 @@
 #include <vector>
 
 #include "RknnLayout.h"
+#include "RknnQuantize.h"
 #include "rknn_api.h"
 
 namespace {
@@ -88,6 +91,23 @@ float read_output(const rknn_tensor_attr& a, const void* src, size_t i) {
   }
 }
 
+bool write_inputs(const rknn_tensor_attr& a, const std::vector<float>& values, void* dst) {
+  const auto dims = executorch_dims(a);
+  if (a.type == RKNN_TENSOR_INT8 && a.fmt == RKNN_TENSOR_NHWC && dims.size() == 4) {
+    executorch_rknn::quantize_nchw_to_nhwc_s8(values.data(), static_cast<int8_t*>(dst), dims[0], dims[1], dims[2],
+                                              dims[3], a.w_stride ? a.w_stride : dims[3], 1.0f / a.scale, a.zp);
+    return true;
+  }
+  return executorch_rknn::for_each_element(a, dims.data(), dims.size(),
+                                           [&](size_t k, size_t j) { write_input(a, values[k], dst, j); });
+}
+
+double mean(const std::vector<double>& v) {
+  double sum = 0;
+  for (double t : v) sum += t;
+  return v.empty() ? 0 : sum / v.size();
+}
+
 void print_attr(const char* kind, const rknn_tensor_attr& a) {
   std::string dims;
   for (uint32_t d = 0; d < a.n_dims; ++d) dims += (d ? "x" : "") + std::to_string(a.dims[d]);
@@ -124,6 +144,7 @@ int main(int argc, char** argv) {
 
   std::vector<rknn_tensor_attr> in(io.n_input), out(io.n_output), native_out(io.n_output);
   std::vector<rknn_tensor_mem*> in_mem(io.n_input), out_mem(io.n_output);
+  std::vector<std::vector<float>> in_values(io.n_input);
   for (uint32_t i = 0; i < io.n_input; ++i) {
     in[i].index = i;
     rknn_query(ctx, RKNN_QUERY_INPUT_ATTR, &in[i], sizeof(in[i]));
@@ -137,17 +158,15 @@ int main(int argc, char** argv) {
       std::fprintf(stderr, "input %u: expected %u floats, file has %zu bytes\n", i, in[i].n_elems, data.size());
       return 2;
     }
-    std::vector<float> values(in[i].n_elems);
+    std::vector<float>& values = in_values[i];
+    values.resize(in[i].n_elems);
     std::memcpy(values.data(), data.data(), data.size());
     in_mem[i] = rknn_create_mem(ctx, in[i].size_with_stride);
     std::memset(in_mem[i]->virt_addr, 0, in[i].size_with_stride);
     // The data is already in the model's input type; without pass_through the
     // runtime converts it again.
     in[i].pass_through = 1;
-    const auto dims = executorch_dims(in[i]);
-    if (!executorch_rknn::for_each_element(in[i], dims.data(), dims.size(), [&](size_t k, size_t j) {
-          write_input(in[i], values[k], in_mem[i]->virt_addr, j);
-        })) {
+    if (!write_inputs(in[i], values, in_mem[i]->virt_addr)) {
       std::fprintf(stderr, "input %u: layout not handled\n", i);
       return 2;
     }
@@ -171,7 +190,8 @@ int main(int argc, char** argv) {
     }
   }
 
-  std::vector<double> times;
+  for (uint32_t i = 0; i < io.n_input; ++i) rknn_mem_sync(ctx, in_mem[i], RKNN_MEMORY_SYNC_TO_DEVICE);
+  std::vector<double> run_ms, float_in_ms;
   for (int l = 0; l <= loops; ++l) {
     auto t0 = std::chrono::steady_clock::now();
     if (int r = rknn_run(ctx, nullptr); r != RKNN_SUCC) {
@@ -179,13 +199,22 @@ int main(int argc, char** argv) {
       return 1;
     }
     auto t1 = std::chrono::steady_clock::now();
-    if (l > 0) times.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+    for (uint32_t i = 0; i < io.n_input; ++i) {
+      write_inputs(in[i], in_values[i], in_mem[i]->virt_addr);
+      rknn_mem_sync(ctx, in_mem[i], RKNN_MEMORY_SYNC_TO_DEVICE);
+    }
+    rknn_run(ctx, nullptr);
+    auto t2 = std::chrono::steady_clock::now();
+    if (l > 0) {
+      run_ms.push_back(std::chrono::duration<double, std::milli>(t1 - t0).count());
+      float_in_ms.push_back(std::chrono::duration<double, std::milli>(t2 - t1).count());
+    }
   }
-  if (!times.empty()) {
-    double sum = 0;
-    for (double t : times) sum += t;
-    std::printf("run mean=%.3f ms min=%.3f ms over %zu (after 1 warm-up)\n", sum / times.size(),
-                *std::min_element(times.begin(), times.end()), times.size());
+  if (!run_ms.empty()) {
+    std::printf("run mean=%.3f ms min=%.3f ms over %zu (after 1 warm-up)\n", mean(run_ms),
+                *std::min_element(run_ms.begin(), run_ms.end()), run_ms.size());
+    std::printf("float-in mean=%.3f ms min=%.3f ms over %zu (after 1 warm-up)\n", mean(float_in_ms),
+                *std::min_element(float_in_ms.begin(), float_in_ms.end()), float_in_ms.size());
   }
 
   for (uint32_t i = 0; i < io.n_output; ++i) {
