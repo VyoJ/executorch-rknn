@@ -56,9 +56,14 @@ float from_fp16(uint16_t h) {
   return f;
 }
 
-// The tensor's dims as ExecuTorch orders them: NCHW for a 4-D NHWC attribute.
+// The tensor's dims as ExecuTorch orders them: NCHW for a 4-D NHWC attribute
+// or a 5-D NC1HWC2 one (whose n_elems counts the real channels).
 std::vector<uint32_t> executorch_dims(const rknn_tensor_attr& a) {
   if (a.n_dims == 4 && a.fmt == RKNN_TENSOR_NHWC) return {a.dims[0], a.dims[3], a.dims[1], a.dims[2]};
+  if (a.n_dims == 5 && a.fmt == RKNN_TENSOR_NC1HWC2) {
+    const uint32_t N = a.dims[0], H = a.dims[2], W = a.dims[3];
+    return {N, a.n_elems / (N * H * W), H, W};
+  }
   return std::vector<uint32_t>(a.dims, a.dims + a.n_dims);
 }
 

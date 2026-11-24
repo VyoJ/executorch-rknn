@@ -9,7 +9,7 @@ from executorch.backends.xnnpack.quantizer.xnnpack_quantizer import (
     get_symmetric_quantization_config,
 )
 from executorch.exir import to_edge_transform_and_lower
-from executorch_rknn import RknnOptions, RknnPartitioner, blob
+from executorch_rknn import RknnOptions, RknnPartitioner, transform_passes, blob
 from executorch_rknn.onnx_converter.builder import target_name
 from export_mobilenet_v2 import delegate_payloads
 from torch import nn
@@ -31,6 +31,7 @@ def quantize(module, x):
 
 def lower(module, x, options=None, **partitioner_args):
     return to_edge_transform_and_lower(torch.export.export(module, (x,)),
+                                       transform_passes=transform_passes(),
                                        partitioner=[RknnPartitioner(options, **partitioner_args)])
 
 
@@ -52,20 +53,20 @@ def delegate_calls(edge):
 
 
 class Gated(nn.Module):
-    """Two convs whose product (unsupported: aten.mul) feeds a third."""
+    """Two convs whose elementwise maximum (no converter) feeds a third."""
 
     def __init__(self):
         super().__init__()
         self.a, self.b, self.c = nn.Conv2d(3, 8, 1), nn.Conv2d(3, 8, 1), nn.Conv2d(8, 4, 3)
 
     def forward(self, x):
-        return self.c(self.a(x) * self.b(x))
+        return self.c(torch.maximum(self.a(x), self.b(x)))
 
 
 def test_unsupported_op_in_the_middle_splits_the_graph():
     x = torch.randn(1, 3, 8, 8)
     edge = lower(quantize(Gated().eval(), x), x)
-    assert delegate_calls(edge) == (2, ["mul"])
+    assert delegate_calls(edge) == (2, ["maximum"])
 
 
 def test_unsupported_op_at_the_end_stays_on_cpu():
@@ -91,6 +92,22 @@ def test_small_partitions_stay_on_cpu():
     assert delegate_calls(edge) == (0, ["relu", "sin"])
 
 
+def test_mean_of_unquantised_input_stays_on_cpu():
+    # MobileViT's head: the XNNPACK quantiser leaves torch.mean, and so the SiLU
+    # output it reads, in float. RKNN would pool it in float16, wrongly on RV1106.
+    class Net(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.conv, self.fc = nn.Conv2d(3, 8, 3, padding=1), nn.Linear(8, 4)
+
+        def forward(self, x):
+            return self.fc(nn.functional.silu(self.conv(x)).mean((2, 3)))
+
+    x = torch.randn(1, 3, 16, 16)
+    calls, cpu = delegate_calls(lower(quantize(Net().eval(), x), x))
+    assert calls == 2 and {"mean", "mul", "sigmoid"} <= set(cpu), cpu
+
+
 def test_nothing_supported_means_no_delegate():
     class Net(nn.Module):
         def forward(self, x):
@@ -99,6 +116,25 @@ def test_nothing_supported_means_no_delegate():
     assert delegate_calls(lower(Net(), torch.randn(1, 3, 8, 8))) == (0, ["mean", "sin"])
 
 
-def test_float_graph_needs_quantisation():
-    with pytest.raises(ValueError, match="int8 only"):
-        lower(small_net(), torch.randn(1, 3, 16, 16))
+def test_float_graph_stays_on_cpu():
+    edge = lower(small_net(), torch.randn(1, 3, 16, 16))
+    assert delegate_calls(edge)[0] == 0
+
+
+def test_float_graph_with_calibration_inputs(tmp_path):
+    x = torch.randn(1, 3, 16, 16)
+    samples = [(torch.randn_like(x),) for _ in range(4)]
+    model = small_net()
+    edge = lower(model, x, RknnOptions(dump_dir=str(tmp_path)), calibration_inputs=samples,
+                 calibration_program=torch.export.export(model, (x,)))
+    assert delegate_calls(edge) == (1, [])
+    assert (tmp_path / "model.rknn").exists()
+
+
+def test_calibration_follows_the_split():
+    x = torch.randn(1, 3, 8, 8)
+    samples = [(torch.randn_like(x),) for _ in range(4)]
+    model = Gated().eval()
+    edge = lower(model, x, calibration_inputs=samples, calibration_program=torch.export.export(model, (x,)))
+    assert delegate_calls(edge) == (2, ["maximum"])
+

@@ -8,6 +8,12 @@ def test_roundtrip():
     assert blob.unpack(blob.pack(b)) == b
 
 
+def test_outputs_can_share_a_model_output():
+    t = blob.TensorInfo("float32", (1, 8))
+    b = blob.Blob([t], [t, t, t], b"model", [0, 1, 0])
+    assert blob.unpack(blob.pack(b)).output_sources == [0, 1, 0]
+
+
 def test_rejects_other_data():
     with pytest.raises(ValueError):
         blob.unpack(b"XXXX" + bytes(16))

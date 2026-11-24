@@ -2,8 +2,8 @@
 delegation on the board. Runs in the ExecuTorch venv.
 
   middle_end: conv block, GroupNorm (CPU), conv block and classifier, softmax (CPU)
-  gated:      conv block and two 1x1 convs, their product (CPU), conv; the
-              first delegate has two outputs
+  gated:      conv block and two 1x1 convs, their elementwise maximum (CPU),
+              conv; the first delegate has two outputs
 
 Writes out/rknn_partial/<name>/: model.pte, inputs/*.bin (NCHW float32), reference.npz.
 usage: python tests/device/export_partial_check.py, then for each <name>
@@ -23,7 +23,7 @@ from executorch.backends.xnnpack.quantizer.xnnpack_quantizer import (
 )
 from executorch.exir import to_edge_transform_and_lower
 from executorch.exir._serialize._program import deserialize_pte_binary
-from executorch_rknn import RknnOptions, RknnPartitioner
+from executorch_rknn import RknnOptions, RknnPartitioner, transform_passes
 from torch import nn
 from torchao.quantization.pt2e.quantize_pt2e import convert_pt2e, prepare_pt2e
 
@@ -53,7 +53,7 @@ class Gated(nn.Module):
 
     def forward(self, x):
         x = self.head(x)
-        return self.tail(self.value(x) * self.gate(x))
+        return self.tail(torch.maximum(self.value(x), self.gate(x)))
 
 
 def summary(pte):
@@ -80,6 +80,7 @@ def export(name, model):
     quantized = convert_pt2e(prepared)
 
     edge = to_edge_transform_and_lower(torch.export.export(quantized, (calib[0],)),
+                                       transform_passes=transform_passes(),
                                        partitioner=[RknnPartitioner(RknnOptions(dump_dir=str(out)))])
     pte = edge.to_executorch().buffer
     (out / "inputs").mkdir(parents=True, exist_ok=True)

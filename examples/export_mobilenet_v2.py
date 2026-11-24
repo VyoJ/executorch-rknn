@@ -22,7 +22,7 @@ from executorch.backends.xnnpack.quantizer.xnnpack_quantizer import (
 )
 from executorch.exir import to_edge_transform_and_lower
 from executorch.exir._serialize._program import deserialize_pte_binary
-from executorch_rknn import RknnOptions, RknnPartitioner
+from executorch_rknn import RknnOptions, RknnPartitioner, transform_passes
 from executorch_rknn import blob
 from PIL import Image
 from torchao.quantization.pt2e.quantize_pt2e import convert_pt2e, prepare_pt2e
@@ -77,6 +77,7 @@ def main():
 
     options = RknnOptions(target_platform=args.target, dump_dir=str(args.work))
     edge = to_edge_transform_and_lower(torch.export.export(quantized, (calib[0],)),
+                                       transform_passes=transform_passes(),
                                        partitioner=[RknnPartitioner(options)])
     pte = edge.to_executorch().buffer
     args.pte.write_bytes(pte)

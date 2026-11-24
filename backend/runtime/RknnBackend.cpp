@@ -5,7 +5,10 @@
 // for 4-D). execute() quantises inputs into the NPU's own layout and type, and
 // dequantises outputs back.
 
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
 
 #include <executorch/runtime/backend/interface.h>
@@ -47,10 +50,40 @@ struct IoTensor {
 struct RknnHandle {
   rknn_context ctx;
   uint32_t n_inputs;
-  uint32_t n_outputs;
+  uint32_t n_outputs;         // of the .rknn
+  uint32_t n_program_outputs;  // of the delegate; several may read one .rknn output
   IoTensor* inputs;
   IoTensor* outputs;
+  uint32_t* output_source;     // per delegate output, its .rknn output
 };
+
+// With RKNN_PROFILE set in the environment, time spent in all delegates,
+// summed and logged when the last one is destroyed.
+struct Profile {
+  bool on;
+  uint32_t live;
+  uint64_t calls;
+  double inputs_ms, run_ms, outputs_ms;
+};
+Profile profile;
+
+// With RKNN_DUMP=<dir> in the environment, every delegate call writes its float
+// inputs and outputs to <dir>/<call>-in<i>.bin and <dir>/<call>-out<i>.bin,
+// calls numbered from 0 in execution order.
+uint64_t dump_calls;
+
+void dump(const char* dir, uint64_t call, const char* kind, uint32_t i, const Tensor& t) {
+  char path[512];
+  std::snprintf(path, sizeof(path), "%s/%03llu-%s%u.bin", dir, static_cast<unsigned long long>(call), kind, i);
+  if (FILE* f = std::fopen(path, "wb")) {
+    std::fwrite(t.const_data_ptr<float>(), sizeof(float), t.numel(), f);
+    std::fclose(f);
+  }
+}
+
+double ms_since(std::chrono::steady_clock::time_point t) {
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t).count();
+}
 
 // Calls fn(logical_index, npu_index) for every element of t.
 template <typename Fn>
@@ -192,16 +225,21 @@ class RknnBackend final : public BackendInterface {
       ET_CHECK_OR_RETURN_ERROR(blob.tensors[i].dtype == BlobDtype::Float32, NotSupported,
                                "RknnBackend: only float32 delegate inputs and outputs are supported");
 
+    if (profile.live++ == 0) profile = {std::getenv("RKNN_PROFILE") != nullptr, 1, 0, 0, 0, 0};
     auto* allocator = context.get_runtime_allocator();
     auto* h = allocator->allocateInstance<RknnHandle>();
     ET_CHECK_OR_RETURN_ERROR(h != nullptr, MemoryAllocationFailed, "RknnBackend: handle");
     std::memset(h, 0, sizeof(*h));
     h->inputs = allocator->allocateList<IoTensor>(blob.n_inputs);
     h->outputs = allocator->allocateList<IoTensor>(blob.n_outputs);
-    ET_CHECK_OR_RETURN_ERROR((h->inputs || !blob.n_inputs) && (h->outputs || !blob.n_outputs),
-                             MemoryAllocationFailed, "RknnBackend: tensor list");
+    h->output_source = allocator->allocateList<uint32_t>(blob.n_outputs);
+    ET_CHECK_OR_RETURN_ERROR(
+        (h->inputs || !blob.n_inputs) && ((h->outputs && h->output_source) || !blob.n_outputs),
+        MemoryAllocationFailed, "RknnBackend: tensor list");
     std::memset(h->inputs, 0, sizeof(IoTensor) * blob.n_inputs);
     std::memset(h->outputs, 0, sizeof(IoTensor) * blob.n_outputs);
+    h->n_program_outputs = blob.n_outputs;
+    for (uint32_t i = 0; i < blob.n_outputs; ++i) h->output_source[i] = blob.output(i).source;
 
     // rknn_init copies the model, so the blob can be freed afterwards.
     int r = rknn_init(&h->ctx, const_cast<uint8_t*>(blob.rknn), static_cast<uint32_t>(blob.rknn_size), 0, nullptr);
@@ -215,19 +253,37 @@ class RknnBackend final : public BackendInterface {
     rknn_input_output_num io;
     Error err = Error::Ok;
     if (rknn_query(h->ctx, RKNN_QUERY_IN_OUT_NUM, &io, sizeof(io)) != RKNN_SUCC ||
-        io.n_input != blob.n_inputs || io.n_output != blob.n_outputs) {
-      ET_LOG(Error, "RknnBackend: model and program disagree on the number of inputs or outputs");
+        io.n_input != blob.n_inputs || io.n_output > blob.n_outputs) {
+      ET_LOG(Error, "RknnBackend: the model has %u inputs and %u outputs, the program %u and %u", io.n_input,
+             io.n_output, blob.n_inputs, blob.n_outputs);
       err = Error::InvalidProgram;
+    }
+    // Every .rknn output feeds at least one delegate output; the first gives its shape.
+    for (uint32_t k = 0; err == Error::Ok && k < io.n_output; ++k) {
+      uint32_t i = 0;
+      while (i < blob.n_outputs && blob.output(i).source != k) ++i;
+      if (i == blob.n_outputs) {
+        ET_LOG(Error, "RknnBackend: no delegate output reads model output %u", k);
+        err = Error::InvalidProgram;
+      } else {
+        h->outputs[k].logical = blob.output(i);
+      }
+    }
+    for (uint32_t i = 0; err == Error::Ok && i < blob.n_outputs; ++i) {
+      const uint32_t k = blob.output(i).source;
+      if (k >= io.n_output || blob.output(i).numel() != h->outputs[k].logical.numel()) {
+        ET_LOG(Error, "RknnBackend: delegate output %u does not match model output %u", i, k);
+        err = Error::InvalidProgram;
+      }
     }
     for (uint32_t i = 0; err == Error::Ok && i < blob.n_inputs; ++i) {
       h->inputs[i].logical = blob.input(i);
       h->n_inputs = i + 1;
       err = bind(h, h->inputs[i], i, true, allocator);
     }
-    for (uint32_t i = 0; err == Error::Ok && i < blob.n_outputs; ++i) {
-      h->outputs[i].logical = blob.output(i);
-      h->n_outputs = i + 1;
-      err = bind(h, h->outputs[i], i, false, allocator);
+    for (uint32_t k = 0; err == Error::Ok && k < io.n_output; ++k) {
+      h->n_outputs = k + 1;
+      err = bind(h, h->outputs[k], k, false, allocator);
     }
     if (err != Error::Ok) {
       release(h);
@@ -240,33 +296,53 @@ class RknnBackend final : public BackendInterface {
   Error execute(BackendExecutionContext& context, DelegateHandle* handle, Span<EValue*> args) const override {
     (void)context;
     auto* h = static_cast<RknnHandle*>(handle);
-    ET_CHECK_OR_RETURN_ERROR(args.size() == h->n_inputs + h->n_outputs, InvalidArgument,
-                             "RknnBackend: expected %u arguments, got %zu", h->n_inputs + h->n_outputs,
+    ET_CHECK_OR_RETURN_ERROR(args.size() == h->n_inputs + h->n_program_outputs, InvalidArgument,
+                             "RknnBackend: expected %u arguments, got %zu", h->n_inputs + h->n_program_outputs,
                              args.size());
-    for (uint32_t i = 0; i < h->n_inputs + h->n_outputs; ++i) {
-      const IoTensor& t = i < h->n_inputs ? h->inputs[i] : h->outputs[i - h->n_inputs];
+    for (uint32_t i = 0; i < h->n_inputs + h->n_program_outputs; ++i) {
+      const IoTensor& t = i < h->n_inputs ? h->inputs[i] : h->outputs[h->output_source[i - h->n_inputs]];
       const Tensor& tensor = args[i]->toTensor();
       ET_CHECK_OR_RETURN_ERROR(tensor.scalar_type() == ScalarType::Float &&
                                    static_cast<size_t>(tensor.numel()) == t.logical.numel(),
                                InvalidArgument, "RknnBackend: argument %u does not match the model", i);
     }
 
+    auto t0 = std::chrono::steady_clock::now();
     for (uint32_t i = 0; i < h->n_inputs; ++i) {
       ET_CHECK_OK_OR_RETURN_ERROR(write_input(h->inputs[i], args[i]->toTensor().const_data_ptr<float>()));
       rknn_mem_sync(h->ctx, h->inputs[i].mem, RKNN_MEMORY_SYNC_TO_DEVICE);
     }
+    auto t1 = std::chrono::steady_clock::now();
     int r = rknn_run(h->ctx, nullptr);
     ET_CHECK_OR_RETURN_ERROR(r == RKNN_SUCC, Internal, "RknnBackend: rknn_run failed: %d", r);
-    for (uint32_t i = 0; i < h->n_outputs; ++i) {
-      rknn_mem_sync(h->ctx, h->outputs[i].mem, RKNN_MEMORY_SYNC_FROM_DEVICE);
-      ET_CHECK_OK_OR_RETURN_ERROR(
-          read_output(h->outputs[i], args[h->n_inputs + i]->toTensor().mutable_data_ptr<float>()));
+    auto t2 = std::chrono::steady_clock::now();
+    for (uint32_t k = 0; k < h->n_outputs; ++k)
+      rknn_mem_sync(h->ctx, h->outputs[k].mem, RKNN_MEMORY_SYNC_FROM_DEVICE);
+    for (uint32_t i = 0; i < h->n_program_outputs; ++i)
+      ET_CHECK_OK_OR_RETURN_ERROR(read_output(h->outputs[h->output_source[i]],
+                                              args[h->n_inputs + i]->toTensor().mutable_data_ptr<float>()));
+    if (const char* dir = std::getenv("RKNN_DUMP")) {
+      for (uint32_t i = 0; i < h->n_inputs; ++i) dump(dir, dump_calls, "in", i, args[i]->toTensor());
+      for (uint32_t i = 0; i < h->n_program_outputs; ++i)
+        dump(dir, dump_calls, "out", i, args[h->n_inputs + i]->toTensor());
+      ++dump_calls;
+    }
+    if (profile.on) {
+      profile.calls += 1;
+      profile.inputs_ms += std::chrono::duration<double, std::milli>(t1 - t0).count();
+      profile.run_ms += std::chrono::duration<double, std::milli>(t2 - t1).count();
+      profile.outputs_ms += ms_since(t2);
     }
     return Error::Ok;
   }
 
   void destroy(DelegateHandle* handle) const override {
-    if (handle) release(static_cast<RknnHandle*>(handle));
+    if (!handle) return;
+    release(static_cast<RknnHandle*>(handle));
+    if (--profile.live == 0 && profile.on && profile.calls)
+      ET_LOG(Info, "RknnBackend profile: %llu delegate calls; input conversion %.1f ms, rknn_run %.1f ms, "
+             "output conversion %.1f ms (totals)", static_cast<unsigned long long>(profile.calls),
+             profile.inputs_ms, profile.run_ms, profile.outputs_ms);
   }
 };
 

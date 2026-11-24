@@ -17,7 +17,7 @@ from executorch.backends.xnnpack.quantizer.xnnpack_quantizer import (
     get_symmetric_quantization_config,
 )
 from executorch.exir import to_edge_transform_and_lower
-from executorch_rknn import RknnOptions, RknnPartitioner
+from executorch_rknn import RknnOptions, RknnPartitioner, transform_passes
 from torch import nn
 from torchao.quantization.pt2e.quantize_pt2e import convert_pt2e, prepare_pt2e
 
@@ -36,6 +36,7 @@ def main():
     quantized = convert_pt2e(prepared)
 
     edge = to_edge_transform_and_lower(torch.export.export(quantized, (calib[0],)),
+                                       transform_passes=transform_passes(),
                                        partitioner=[RknnPartitioner(RknnOptions(dump_dir=str(OUT)))])
     (OUT / "inputs").mkdir(parents=True, exist_ok=True)
     (OUT / "model.pte").write_bytes(edge.to_executorch().buffer)

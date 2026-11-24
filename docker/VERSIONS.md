@@ -24,3 +24,5 @@
 | SmolLM2-135M | `HuggingFaceTB/SmolLM2-135M` at `93efa2f097d58c2a74874c7e644dbc9b0cee75a2`, safetensors sha256 `80521b40…d55da1` | `docker/aot.Dockerfile` |
 | whisper-tiny | `openai/whisper-tiny` at `169d4a4341b33bc18d8881c4b69c2e104e1cc0af`, safetensors sha256 `7ebd0e69…2ea2395` | `docker/aot.Dockerfile` |
 | jfk.flac | `openai/whisper` at `86098128c0b4f24f0e2aa2994de830614b474227`, sha256 `63a4b1e4…949715` | `docker/aot.Dockerfile` |
+| MobileViT-XS | `apple/mobilevit-x-small` at `0f4f298e136829c566224228d82066548a9082de`, `pytorch_model.bin` sha256 `09b264fe…e63e8`; Apple research-only model licence | `docker/aot.Dockerfile` |
+| torch (RKNN venv) | 2.1.0+cpu, the newest the toolkit's requirements allow; used only by the toolkit's own graph rewrites | `docker/aot.Dockerfile` |

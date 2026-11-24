@@ -11,7 +11,7 @@ import onnx
 import torch
 from conftest import run_simulator
 from executorch.exir import to_edge_transform_and_lower
-from executorch_rknn import RknnOptions, RknnPartitioner
+from executorch_rknn import RknnOptions, RknnPartitioner, transform_passes
 from export_mobilenet_v2 import delegate_payloads, images, quantize
 from torchvision.models import MobileNet_V2_Weights, mobilenet_v2
 
@@ -21,6 +21,7 @@ def test_mobilenet_v2(tmp_path):
     calib = [x for _, x in images("train", 2)]
     quantized = quantize(model, calib)
     edge = to_edge_transform_and_lower(torch.export.export(quantized, (calib[0],)),
+                                       transform_passes=transform_passes(),
                                        partitioner=[RknnPartitioner(RknnOptions(dump_dir=str(tmp_path)))])
     delegate_payloads(edge.to_executorch().buffer)
 

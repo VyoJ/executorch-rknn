@@ -55,6 +55,10 @@ CASES = {
     "permute": (Lambda(lambda x: x.permute(0, 2, 3, 1)), X),
     "residual_add": (Residual(), X),
     "flatten_linear": (Classifier(), (1, 8, 4, 4)),
+    "silu": (nn.SiLU(), X),
+    "mul": (Lambda(lambda x: x * torch.sigmoid(x)), X),
+    "cat": (Lambda(lambda x: torch.cat([x, x * x], 1)), X),
+    "clone": (Lambda(lambda x: x.permute(0, 2, 3, 1).contiguous() + 1.0), X),
 }
 
 
@@ -109,3 +113,9 @@ def test_quantized():
     # differently; allow a couple of output steps.
     step = float(next(a for a in quantized.graph.nodes if "dequantize_per_tensor" in str(a.target)).args[1])
     np.testing.assert_allclose(got, expected, atol=max(3 * step, 0.05))
+
+
+def test_batched_4d_reshape_is_unsupported():
+    ep = edge_program(Lambda(lambda x: x.reshape(16, 2, 4, 8)), torch.randn(1, 8, 16, 8))
+    (view,) = [n for n in ep.graph.nodes if n.op == "call_function"]
+    assert "batch 16" in unsupported_reason(view)

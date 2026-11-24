@@ -85,6 +85,22 @@ RUN set -e; mkdir -p /opt/data/hf/SmolLM2-135M /opt/data/hf/whisper-tiny; cd /op
         | sha256sum -c - \
     && chmod -R a+rX /opt/data/hf
 
+# MobileViT-XS for demo D1. Apple's research-only model licence; fetched here, never redistributed.
+ARG MOBILEVIT_REV=0f4f298e136829c566224228d82066548a9082de
+RUN set -e; mkdir -p /opt/data/hf/mobilevit-x-small; cd /opt/data/hf/mobilevit-x-small \
+    && for f in config.json preprocessor_config.json pytorch_model.bin; do \
+         curl -fsSL -o $f https://huggingface.co/apple/mobilevit-x-small/resolve/${MOBILEVIT_REV}/$f; done \
+    && printf '%s  %s\n' \
+        37a304f61c08ac7c485a21bb6000e24169de68b467c973a43b3e26e94082cfe0 config.json \
+        ac69eb9624defabf01056e9dee3c68eb9d5f528a550007033c7574d7179249ec preprocessor_config.json \
+        09b264fe681cb67144c41fe10b923c8d59ad4273f9d4cc3053080e6e986e63e8 pytorch_model.bin \
+        | sha256sum -c - \
+    && chmod -R a+rX /opt/data/hf
+
+# The toolkit imports torch for some graph rewrites (LayerNorm folding); without
+# it, plain-RKNN builds of transformer models stop with ModuleNotFoundError.
+RUN /opt/rknn/bin/pip install --no-cache-dir torch==2.1.0+cpu --index-url https://download.pytorch.org/whl/cpu
+
 ENV PATH="/opt/venv/bin:${PATH}"
 
 ARG UID=1000

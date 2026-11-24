@@ -28,6 +28,17 @@ def _io(edge_program):
     return inputs, [_tensor_info(a.meta["val"]) for a in output.args[0]]
 
 
+def _dataset_list(model, directory, tmp):
+    """RKNN's dataset file for a directory of <input name>_<sample>.npy: one
+    line per sample, one file per model input, in input order."""
+    names = [i.name for i in model.graph.input]
+    count = len(list(directory.glob(f"{names[0]}_*.npy")))
+    lines = [" ".join(str(directory / f"{name}_{i:03d}.npy") for name in names) for i in range(count)]
+    path = tmp / "dataset.txt"
+    path.write_text("\n".join(lines) + "\n")
+    return path
+
+
 def to_rknn(model, options):
     """ONNX model -> .rknn bytes, through the toolkit in its own venv."""
     quantized = any(n.op_type in _QDQ for n in model.graph.node)
@@ -38,6 +49,8 @@ def to_rknn(model, options):
         tmp = Path(tmp)
         (tmp / "model.onnx").write_bytes(model.SerializeToString())
         settings = {**asdict(options), "quantize": not quantized}
+        if not quantized and options.calibration_dataset and Path(options.calibration_dataset).is_dir():
+            settings["calibration_dataset"] = str(_dataset_list(model, Path(options.calibration_dataset), tmp))
         (tmp / "options.json").write_text(json.dumps(settings))
         result = subprocess.run(
             [RKNN_PYTHON, str(_CONVERT_SCRIPT), str(tmp / "model.onnx"), str(tmp / "model.rknn"),
@@ -58,7 +71,7 @@ class RknnBackend(BackendDetails):
     @staticmethod
     def preprocess(edge_program, compile_specs):
         options = RknnOptions.from_compile_specs(compile_specs)
-        model = onnx_converter.convert(edge_program)
+        model, sources = onnx_converter.convert_program(edge_program)
         inputs, outputs = _io(edge_program)
         rknn = to_rknn(model, options)
-        return PreprocessResult(processed_bytes=blob.pack(blob.Blob(inputs, outputs, rknn)))
+        return PreprocessResult(processed_bytes=blob.pack(blob.Blob(inputs, outputs, rknn, sources)))

@@ -14,7 +14,8 @@ def build(onnx_path, options, quantize):
 
     rknn = RKNN()
     config = {"target_platform": options["target_platform"],
-              "optimization_level": options["optimization_level"]}
+              "optimization_level": options["optimization_level"],
+              "quantized_algorithm": options.get("quantized_algorithm", "normal")}
     if options.get("mean_values") is not None:
         config["mean_values"] = [options["mean_values"]]
     if options.get("std_values") is not None:

@@ -40,7 +40,9 @@ def main():
         print(f"missing board outputs: {missing}")
         return 1
     board = np.stack([np.fromfile(out_dir / p.name, np.float32) for p in inputs])
-    pt2e, flt = ref["pt2e"].reshape(len(inputs), -1), ref["float"].reshape(len(inputs), -1)
+    flt = ref["float"].reshape(len(inputs), -1)
+    # Without a PT2E reference (RKNN calibrated the model), compare with float.
+    pt2e = ref["pt2e"].reshape(len(inputs), -1) if "pt2e" in ref.files else flt
     cos = [cosine(b, p) for b, p in zip(board, pt2e)]
     ok = np.mean(cos) >= args.min_cosine
     summary = (f"{len(inputs)} inputs; mean cosine vs PT2E {np.mean(cos):.4f} (min {np.min(cos):.4f}), "

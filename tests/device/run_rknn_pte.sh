@@ -39,6 +39,6 @@ for input in "$dir"/inputs/*.bin; do
 done
 
 adb push -q "$(ls "$dir"/inputs/*.bin | head -1)" "$remote/input.bin"
-adb shell "cd $remote && /usr/bin/time -v ./executor_runner --model_path=model.pte \
+adb shell "cd $remote && RKNN_PROFILE=1 /usr/bin/time -v ./executor_runner --model_path=model.pte \
   --inputs=input.bin --print_output=none --num_executions=100; echo exit=\$?" > "$out/timing.log" 2>&1
-tr -d '\r' < "$out/timing.log" | grep -E 'exit=|executed successfully|Maximum resident'
+tr -d '\r' < "$out/timing.log" | grep -E 'exit=|executed successfully|RknnBackend profile|Maximum resident'

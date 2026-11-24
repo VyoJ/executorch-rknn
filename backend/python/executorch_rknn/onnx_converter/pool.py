@@ -1,6 +1,10 @@
 import numpy as np
 
-from .builder import converts
+from .builder import converts, target_name
+
+QUANTIZE = "quantized_decomposed.quantize_per_tensor.default"
+DEQUANTIZE = {"quantized_decomposed.dequantize_per_tensor.default",
+              "quantized_decomposed.dequantize_per_channel.default"}
 
 
 @converts("aten.max_pool2d_with_indices.default")
@@ -17,6 +21,11 @@ def _check_mean(n):
     if rank != 4 or sorted(d % 4 for d in dims) != [2, 3]:
         # RV1106 has no ReduceMean, on the NPU or in its CPU fallback.
         return f"mean over dims {list(dims)} of a rank-{rank} tensor"
+    quantized = any(target_name(m) == QUANTIZE for m in n.graph.nodes)
+    if quantized and target_name(x) not in DEQUANTIZE:
+        # RKNN runs it in float16, and on RV1106 gets it wrong: MobileViT's
+        # pooled SiLU came out about a third too small.
+        return "mean of an unquantised input in a quantised graph"
     return None
 
 
