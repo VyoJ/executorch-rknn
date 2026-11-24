@@ -16,6 +16,13 @@ IR_VERSION = 9
 CONVERTERS = {}
 CHECKS = {}
 
+QUANTIZE = "quantized_decomposed.quantize_per_tensor.default"
+DEQUANTIZE = {
+    "quantized_decomposed.dequantize_per_tensor.default",
+    "quantized_decomposed.dequantize_per_channel.default",
+}
+QDQ = {QUANTIZE, *DEQUANTIZE}
+
 
 def converts(*targets, check=None):
     """Register a converter. check(node) -> str | None names a reason the node cannot be converted."""
@@ -117,7 +124,7 @@ def _leaf_output(b, arg):
     nothing inside the model reads: its int8 graph has no tensor for a value
     that also feeds a quantize (the two are fused), and it drops such outputs
     without an error. Export a copy of that quantize/dequantize instead; the
-    CPU side quantizes the value again with the same parameters, so nothing
+    CPU side quantises the value again with the same parameters, so nothing
     changes."""
     name = b.name(arg)
     readers = [node for node in b.nodes if name in node.input]
@@ -125,7 +132,7 @@ def _leaf_output(b, arg):
         return name
     q = next((node for node in readers if node.op_type == "QuantizeLinear"), None)
     if q is None and not any(node.op_type == "QuantizeLinear" for node in b.nodes):
-        return name  # a float graph: RKNN places the quantization itself
+        return name  # a float graph: RKNN places the quantisation itself
     if q is None:
         raise NotImplementedError(f"{arg.name} is a delegate output that the delegate also reads, "
                                   "and no quantize follows it")

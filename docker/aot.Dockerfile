@@ -57,35 +57,9 @@ RUN python3 -m venv /opt/rknn \
         "Pillow>=10.0.1" \
     && rm /tmp/rknn_toolkit2-*.whl
 
-# Transformer models (spike D). transformers and optimum-executorch run only at
-# export time. optimum-executorch 1.1.0 needs the transformers it pins (its
-# static cache breaks on later versions); its other pins are skipped with
-# --no-deps and it works with the versions above.
-ARG SMOLLM2_REV=93efa2f097d58c2a74874c7e644dbc9b0cee75a2
-ARG WHISPER_REV=169d4a4341b33bc18d8881c4b69c2e104e1cc0af
-ARG OPENAI_WHISPER_COMMIT=86098128c0b4f24f0e2aa2994de830614b474227
-RUN /opt/venv/bin/pip install --no-cache-dir transformers==5.0.0rc1 soundfile==0.14.0 \
-    && /opt/venv/bin/pip install --no-cache-dir --no-deps \
-        optimum-executorch==1.1.0 optimum==2.0.0 accelerate==1.16.0
-RUN set -e; mkdir -p /opt/data/hf/SmolLM2-135M /opt/data/hf/whisper-tiny; cd /opt/data/hf \
-    && hf=https://huggingface.co \
-    && for f in config.json tokenizer.json model.safetensors; do \
-         curl -fsSL -o SmolLM2-135M/$f $hf/HuggingFaceTB/SmolLM2-135M/resolve/${SMOLLM2_REV}/$f; done \
-    && for f in config.json preprocessor_config.json tokenizer.json model.safetensors; do \
-         curl -fsSL -o whisper-tiny/$f $hf/openai/whisper-tiny/resolve/${WHISPER_REV}/$f; done \
-    && curl -fsSL -o jfk.flac https://raw.githubusercontent.com/openai/whisper/${OPENAI_WHISPER_COMMIT}/tests/jfk.flac \
-    && printf '%s  %s\n' \
-        1d556eab73b69c7f11f64c557a2f9c6f440bd4c6b89bb2584a6b498c92603843 SmolLM2-135M/config.json \
-        9ca9acddb6525a194ec8ac7a87f24fbba7232a9a15ffa1af0c1224fcd888e47c SmolLM2-135M/tokenizer.json \
-        80521b40281d6ce74e35c9282c22539e75aa0ac8578892b2a59955ef78d55da1 SmolLM2-135M/model.safetensors \
-        ffdccec4f3211f4c63310f2b7098f309fe70f3952cedc5e4d11e43f5b2379b98 whisper-tiny/config.json \
-        9b5cd03a36fbb8a627c64d98a5b5b126ead95a77720723944487311f0110b666 whisper-tiny/preprocessor_config.json \
-        7ebd0e69e78190ffe1438491fa05cc1f5c1aa3a4c4db3bc1723adbb551ea2395 whisper-tiny/model.safetensors \
-        63a4b1e4c1dc655ac70961ffbf518acd249df237e5a0152faae9a4a836949715 jfk.flac \
-        | sha256sum -c - \
-    && chmod -R a+rX /opt/data/hf
-
-# MobileViT-XS for demo D1. Apple's research-only model licence; fetched here, never redistributed.
+# MobileViT-XS for examples/mobilevit, loaded with transformers. Apple's research-only
+# model licence: the weights are fetched here, never redistributed.
+RUN /opt/venv/bin/pip install --no-cache-dir transformers==5.0.0rc1
 ARG MOBILEVIT_REV=0f4f298e136829c566224228d82066548a9082de
 RUN set -e; mkdir -p /opt/data/hf/mobilevit-x-small; cd /opt/data/hf/mobilevit-x-small \
     && for f in config.json preprocessor_config.json pytorch_model.bin; do \

@@ -9,13 +9,13 @@ from executorch.exir.backend.compile_spec_schema import CompileSpec
 @dataclass
 class RknnOptions:
     target_platform: str = "rv1106"
-    # Level 2 reproduces PT2E's int8 output exactly on shallow networks (spike C)
-    # but made MobileNetV2 68% slower for no accuracy gain.
+    # Level 2 reproduces PT2E's int8 output exactly on shallow networks but made
+    # MobileNetV2 68% slower for no accuracy gain.
     optimization_level: int = 3
     # Fold input normalisation into the model: input = (x - mean) / std per channel.
     mean_values: list | None = None
     std_values: list | None = None
-    # Float graph only: let RKNN calibrate on this dataset list (spike C option 1),
+    # Float graph only: let RKNN calibrate on this dataset list,
     # or on a directory of <input name>_<sample>.npy (RknnPartitioner writes these).
     calibration_dataset: str | None = None
     # RKNN's calibration method: normal, mmse or kl_divergence.

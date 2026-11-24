@@ -5,9 +5,8 @@ RknnPartitioner; the others make what stays on the CPU cheaper."""
 
 from torch.fx.passes.infra.pass_base import PassBase, PassResult
 
-from .onnx_converter.builder import target_name
+from .onnx_converter.builder import QUANTIZE, target_name
 
-QUANTIZE = "quantized_decomposed.quantize_per_tensor.default"
 EXPAND = "aten.expand_copy.default"
 VIEW = "aten.view_copy.default"
 BMM = "aten.bmm.default"

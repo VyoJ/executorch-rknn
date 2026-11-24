@@ -10,7 +10,6 @@ Runs in the ExecuTorch venv. Writes:
 """
 
 import argparse
-import sys
 from collections import Counter
 from pathlib import Path
 
@@ -28,8 +27,7 @@ from PIL import Image
 from torchao.quantization.pt2e.quantize_pt2e import convert_pt2e, prepare_pt2e
 from torchvision.models import MobileNet_V2_Weights, mobilenet_v2
 
-sys.path.insert(0, str(Path(__file__).resolve().parent / "rknn_baseline"))
-from prepare import WNID_TO_INDEX, crop, normalize, pick  # noqa: E402
+from imagenette import WNID_TO_INDEX, crop, normalize, pick
 
 
 def images(split, per_class):

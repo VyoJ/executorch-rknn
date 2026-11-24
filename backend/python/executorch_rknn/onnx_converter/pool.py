@@ -1,10 +1,6 @@
 import numpy as np
 
-from .builder import converts, target_name
-
-QUANTIZE = "quantized_decomposed.quantize_per_tensor.default"
-DEQUANTIZE = {"quantized_decomposed.dequantize_per_tensor.default",
-              "quantized_decomposed.dequantize_per_channel.default"}
+from .builder import DEQUANTIZE, QUANTIZE, converts, target_name
 
 
 @converts("aten.max_pool2d_with_indices.default")

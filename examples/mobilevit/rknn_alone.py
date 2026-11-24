@@ -1,5 +1,6 @@
 """Try MobileViT-XS with plain RKNN: float ONNX, RKNN's own int8 calibration,
-target rv1106. Demo D1 starts by showing this does not work.
+target rv1106. The build succeeds, but the model asks for 80 MB of NPU memory
+and rknn_init fails on a board with the usual 66 MB region.
 
   scripts/dk aot python examples/mobilevit/rknn_alone.py export
   scripts/dk aot /opt/rknn/bin/python examples/mobilevit/rknn_alone.py build

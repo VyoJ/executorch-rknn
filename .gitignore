@@ -5,3 +5,4 @@ build/
 *.onnx
 *.whl
 __pycache__/
+progress/

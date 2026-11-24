@@ -1,4 +1,4 @@
-"""MobileViT-XS (apple/mobilevit-x-small) and its preprocessing, for demo D1.
+"""MobileViT-XS (apple/mobilevit-x-small) and its preprocessing.
 
 Preprocessing follows the model's preprocessor_config.json: shorter side to
 288 (bilinear), centre crop 256, scale to [0, 1], RGB -> BGR. The 160 px
@@ -13,8 +13,8 @@ import torch
 from PIL import Image
 from transformers import MobileViTConfig, MobileViTForImageClassification
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "rknn_baseline"))
-from prepare import WNID_TO_INDEX, pick  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from imagenette import WNID_TO_INDEX, pick  # noqa: E402
 
 WEIGHTS = Path("/opt/data/hf/mobilevit-x-small")
 SIZE = 256

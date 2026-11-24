@@ -28,7 +28,7 @@ RUN git clone --filter=blob:none --no-checkout https://github.com/LuckfoxTECH/lu
     && rm -rf /tmp/sdk \
     && /opt/toolchain/bin/${TOOLCHAIN}-gcc --version
 
-# RKNN runtime library, header and Rockchip's RV1106 demos, at the same commit
+# RKNN runtime library and header, at the same commit
 # as the rknn-toolkit2 wheel in the aot image.
 ARG RKNN_TOOLKIT2_COMMIT=b25dadacc24b88eb7dfcaa47c9c525ecca89b319
 RUN git clone --filter=blob:none --no-checkout https://github.com/airockchip/rknn-toolkit2.git /tmp/rknn \
@@ -36,9 +36,6 @@ RUN git clone --filter=blob:none --no-checkout https://github.com/airockchip/rkn
     && git sparse-checkout set --no-cone \
         /rknpu2/runtime/Linux/librknn_api/include/ \
         /rknpu2/runtime/Linux/librknn_api/armhf-uclibc/ \
-        /rknpu2/examples/RV1106_RV1103/rknn_mobilenet_demo/ \
-        /rknpu2/examples/3rdparty/stb/ \
-        /rknpu2/examples/3rdparty/fp16/ \
     && git checkout "${RKNN_TOOLKIT2_COMMIT}" \
     && mv rknpu2 /opt/rknpu2 \
     && rm -rf /tmp/rknn

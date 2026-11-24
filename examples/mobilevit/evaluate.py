@@ -1,10 +1,8 @@
 """Top-1 of MobileViT-XS variants on the host, over all of Imagenette's
 validation set (3,925 images), against the float model.
 
-Runs in the ExecuTorch venv. Each image is loaded once and run through every
-model. Prints top-1 with a 95% interval, and the paired difference from
-float with its own interval: the models see the same images, so the
-difference is far less noisy than the two top-1 figures.
+Runs in the ExecuTorch venv. Prints top-1 with a 95% interval, and each
+model's paired difference from float with its own interval.
 
   python examples/mobilevit/evaluate.py --program qat=out/mobilevit_qat/program.pt2
 """
@@ -57,10 +55,10 @@ def main():
     for name, c in correct.items():
         c = np.array(c, dtype=float)
         p = c.mean()
-        line = f"{name:28s} top-1 {p:.3f} ± {1.96 * math.sqrt(p * (1 - p) / n):.3f}"
+        line = f"{name:28s} top-1 {p:.3f} +- {1.96 * math.sqrt(p * (1 - p) / n):.3f}"
         if name != "float":
             d = c - ref
-            line += f"   vs float {d.mean():+.3f} ± {1.96 * d.std(ddof=1) / math.sqrt(n):.3f}"
+            line += f"   vs float {d.mean():+.3f} +- {1.96 * d.std(ddof=1) / math.sqrt(n):.3f}"
         print(line)
 
 

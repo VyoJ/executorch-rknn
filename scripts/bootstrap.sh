@@ -10,4 +10,8 @@ git -C "$root/third_party/executorch" submodule update --init \
   third-party/flatcc \
   third-party/gflags \
   third-party/json \
-  backends/xnnpack/third-party/FXdiv
+  backends/xnnpack/third-party/FXdiv \
+  backends/xnnpack/third-party/FP16 \
+  backends/xnnpack/third-party/XNNPACK \
+  backends/xnnpack/third-party/cpuinfo \
+  backends/xnnpack/third-party/pthreadpool

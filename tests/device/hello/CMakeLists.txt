@@ -1,7 +1,0 @@
-cmake_minimum_required(VERSION 3.16)
-project(luckfox_hello CXX)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-find_package(Threads REQUIRED)
-add_executable(hello hello.cpp)
-target_link_libraries(hello PRIVATE Threads::Threads)

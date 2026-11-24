@@ -15,18 +15,13 @@ from torch.fx.passes.operator_support import OperatorSupportBase
 
 from .compile_specs import RknnOptions
 from .onnx_converter import unsupported_reason
-from .onnx_converter.builder import target_name
+from .onnx_converter.builder import QDQ, QUANTIZE, target_name
 from .preprocess import RknnBackend
 
 log = logging.getLogger(__name__)
 
-_QDQ = {
-    "quantized_decomposed.quantize_per_tensor.default",
-    "quantized_decomposed.dequantize_per_tensor.default",
-    "quantized_decomposed.dequantize_per_channel.default",
-}
 # Nodes that do no work on the NPU worth a context of their own.
-_TRIVIAL = _QDQ | {"aten.view_copy.default", "aten.permute_copy.default", "dim_order_ops._clone_dim_order.default"}
+_TRIVIAL = QDQ | {"aten.view_copy.default", "aten.permute_copy.default", "dim_order_ops._clone_dim_order.default"}
 
 
 _WEIGHTED = {"aten.convolution.default": 1, "aten.addmm.default": 2}  # weight argument index
@@ -40,7 +35,7 @@ def _float_weight(node):
     w = node.args[_WEIGHTED[target_name(node)]]
     while target_name(w) in ("aten.permute_copy.default", "aten.view_copy.default"):
         w = w.args[0]
-    return target_name(w) not in _QDQ
+    return target_name(w) not in QDQ
 
 
 class _Supported(OperatorSupportBase):
@@ -58,8 +53,6 @@ class _Supported(OperatorSupportBase):
         return unsupported_reason(node) is None
 
 
-from .passes import QUANTIZE as _Q
-
 
 def _float_boundaries(groups):
     """Adjust the groups so only float tensors cross their boundaries: the
@@ -70,10 +63,10 @@ def _float_boundaries(groups):
     all outside, so the same holds)."""
     owner = {n: i for i, g in enumerate(groups) for n in g}
     for q in owner:
-        if target_name(q) == _Q and len(q.users) > 1:
+        if target_name(q) == QUANTIZE and len(q.users) > 1:
             raise ValueError("a quantize node feeds several dequantize nodes; lower with "
                              "transform_passes=executorch_rknn.transform_passes()")
-    for q in [n for n in owner if target_name(n) == _Q]:
+    for q in [n for n in owner if target_name(n) == QUANTIZE]:
         for dq in q.users:
             if owner.get(dq) != owner[q]:
                 if dq in owner:
@@ -81,7 +74,7 @@ def _float_boundaries(groups):
                 groups[owner[q]].add(dq)
                 owner[dq] = owner[q]
     for n in list(owner):
-        if target_name(n) in _QDQ and target_name(n) != _Q:
+        if target_name(n) in QDQ and target_name(n) != QUANTIZE:
             src = n.args[0]
             if src.op != "placeholder" and owner.get(src) != owner[n]:
                 groups[owner[n]].discard(n)
@@ -91,7 +84,7 @@ def _float_boundaries(groups):
 
 def _quantize_at_entry(g, constants):
     """Move to the CPU any node that reads an activation from outside its
-    group without quantizing it. RKNN keeps such an input in float16, which
+    group without quantising it. RKNN keeps such an input in float16, which
     RV1103/RV1106 refuse at run time. The nodes trimmed this way are views,
     permutes and copies left between a CPU operator and the next quantize,
     and quantize/dequantize pairs with nothing between them."""
@@ -102,7 +95,7 @@ def _quantize_at_entry(g, constants):
             if n not in g or n.target is operator.getitem:
                 continue
             from_outside = any(a not in g and a.name not in constants for a in n.all_input_nodes)
-            if target_name(n) == _Q:
+            if target_name(n) == QUANTIZE:
                 # A quantize/dequantize pair that only passes a value through
                 # would run as a standalone conversion, which RV1106 cannot do.
                 if from_outside and not any(u in g for dq in n.users for u in dq.users):
@@ -121,7 +114,7 @@ def _quantize_at_entry(g, constants):
 
 
 def _is_quantized(group):
-    return any(target_name(n) in _QDQ for n in group)
+    return any(target_name(n) in QDQ for n in group)
 
 
 def _external_inputs(group, constants):
@@ -179,7 +172,7 @@ class RknnPartitioner(Partitioner):
     min_partition_ops: groups with fewer operators than this (not counting
     quantize, dequantize, view, permute and clone) stay on the CPU.
 
-    Groups without PT2E quantization need RKNN's own calibration. Given
+    Groups without PT2E quantisation need RKNN's own calibration. Given
     calibration_inputs (tuples of model inputs) and calibration_program (the
     ExportedProgram being lowered, which still has its weights), the
     partitioner runs the inputs through it and calibrates each such group on
@@ -224,8 +217,8 @@ class RknnPartitioner(Partitioner):
     def partition(self, exported_program):
         gm = exported_program.graph_module
         # In a PT2E graph, operators left in float run on the CPU, unless RKNN
-        # calibrates: then it quantizes them itself.
-        quantized_graph = any(n.op == "call_function" and target_name(n) in _QDQ for n in gm.graph.nodes)
+        # calibrates: then it quantises them itself.
+        quantized_graph = any(n.op == "call_function" and target_name(n) in QDQ for n in gm.graph.nodes)
         float_weights = not quantized_graph or self.calibration_inputs is not None
         proposed = CapabilityBasedPartitioner(gm, _Supported(float_weights),
                                               allows_single_node_partition=True).propose_partitions()

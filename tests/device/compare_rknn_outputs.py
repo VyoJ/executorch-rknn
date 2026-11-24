@@ -5,11 +5,8 @@ labels for classifiers).
 Run in the aot container after tests/device/run_rknn_pte.sh (outputs in
 board-pte/) or tests/device/run_rknn_model.sh (board/). Exits non-zero if an
 output is missing, the mean cosine with PT2E is below --min-cosine, or, for
-classifiers, top-1 agreement with PT2E is below --min-agree.
-
-PT2E is not a bit-exact reference for deep networks: its float arithmetic and
-the NPU's integer arithmetic round differently near quantisation steps, and the
-differences add up layer by layer.
+classifiers, top-1 agreement with PT2E is below --min-agree. Deep networks
+do not match PT2E exactly: the NPU rounds differently near quantisation steps.
 """
 
 import argparse
