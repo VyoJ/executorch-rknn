@@ -4,12 +4,13 @@
 # 100-execution timing run on the first input. Logs go to <dir>/board-pte/.
 # Files are staged in /tmp (RAM) and removed afterwards.
 # Build the runner first: scripts/dk cross scripts/build_rknn_runner.sh
+# (RUNNER=<path> picks another build, e.g. out/rknn-runner-xnnpack/executor_runner.stripped)
 # usage: tests/device/run_rknn_pte.sh out/mv2_rknn.pte out/mv2_rknn
 set -e
 root="$(cd "$(dirname "$0")/../.." && pwd)"
 pte="$1"
 dir="$(cd "$2" && pwd)"
-runner="$root/out/rknn-runner/executor_runner.stripped"
+runner="${RUNNER:-$root/out/rknn-runner/executor_runner.stripped}"
 remote=/tmp/rknn-pte
 out="$dir/board-pte"
 

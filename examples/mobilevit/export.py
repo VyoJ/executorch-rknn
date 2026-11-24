@@ -92,7 +92,7 @@ def program_summary(pte):
         for i in chain.instructions:
             args = i.instr_args
             if type(args).__name__ == "DelegateCall":
-                calls["RknnBackend"] += 1
+                calls[plan.delegates[args.delegate_index].id] += 1
             elif type(args).__name__ == "KernelCall":
                 calls[plan.operators[args.op_index].name] += 1
     return calls
@@ -114,6 +114,8 @@ def main():
     parser.add_argument("--qat-steps", type=int, default=0, help="with pt2e: quantisation-aware training steps")
     parser.add_argument("--qat-lr", type=float, default=5e-5)
     parser.add_argument("--qat-per-class", type=int, default=60, help="training images per class for QAT")
+    parser.add_argument("--xnnpack", action="store_true",
+                        help="run what RKNN leaves on the CPU through XNNPACK where it can")
     parser.add_argument("--program", type=Path,
                         help="lower this program.pt2 from an earlier run instead of quantising again")
     args = parser.parse_args()
@@ -143,12 +145,18 @@ def main():
         program = torch.export.export(model, (calib[0],))
         partitioner = RknnPartitioner(options, args.min_partition_ops, calibration_inputs=[(x,) for x in calib],
                                       calibration_program=program)
-    edge = to_edge_transform_and_lower(program, transform_passes=transform_passes(), partitioner=[partitioner])
+    partitioners = [partitioner]
+    if args.xnnpack:
+        from executorch.backends.xnnpack.partition.xnnpack_partitioner import XnnpackPartitioner
+        partitioners.append(XnnpackPartitioner())
+    edge = to_edge_transform_and_lower(program, transform_passes=transform_passes(), partitioner=partitioners)
     torch.export.save(program, args.work / "program.pt2")  # the exported (quantised) model, for evaluate.py
     pte = edge.to_executorch().buffer
     args.pte.write_bytes(pte)
     calls = program_summary(pte)
-    print(f"wrote {args.pte} ({len(pte)} bytes): {calls.pop('RknnBackend', 0)} RknnBackend calls; CPU: "
+    delegates = {b: calls.pop(b) for b in ("RknnBackend", "XnnpackBackend") if b in calls}
+    print(f"wrote {args.pte} ({len(pte)} bytes): "
+          + ", ".join(f"{n} {b} calls" for b, n in delegates.items()) + "; CPU: "
           + ", ".join(f"{n} x {op}" for op, n in calls.most_common()))
 
     inputs_dir = args.work / "inputs"

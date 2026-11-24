@@ -1,0 +1,29 @@
+diff --git a/src/arm/linux/hwcap.c b/src/arm/linux/hwcap.c
+index 7f7b4df..5c7d434 100644
+--- a/src/arm/linux/hwcap.c
++++ b/src/arm/linux/hwcap.c
+@@ -78,11 +78,13 @@ cleanup:
+ 	*hwcap2 = getauxval(AT_HWCAP2);
+ 	return true;
+ #else
+-	return false;
++	/* Other C libraries (uClibc, which claims glibc 2.2): read the auxiliary vector from procfs */
++	return cpuinfo_arm_linux_hwcap_from_procfs(hwcap, hwcap2);
+ #endif
+ }
+ 
+-#ifdef __ANDROID__
++#if defined(__ANDROID__) || \
++	!(defined(__GLIBC__) && defined(__GLIBC_MINOR__) && (__GLIBC__ > 2 || __GLIBC__ == 2 && __GLIBC_MINOR__ >= 16))
+ bool cpuinfo_arm_linux_hwcap_from_procfs(uint32_t hwcap[restrict static 1], uint64_t hwcap2[restrict static 1]) {
+ #if CPUINFO_MOCK
+ 	*hwcap = mock_hwcap;
+@@ -139,7 +141,7 @@ cleanup:
+ 	return result;
+ #endif
+ }
+-#endif /* __ANDROID__ */
++#endif /* no glibc getauxval */
+ #elif CPUINFO_ARCH_ARM64
+ void cpuinfo_arm_linux_hwcap_from_getauxval(uint32_t hwcap[restrict static 1], uint64_t hwcap2[restrict static 1]) {
+ #if CPUINFO_MOCK
