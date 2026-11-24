@@ -2,7 +2,8 @@
 # Host-side: run a .pte with executor_runner + RknnBackend on the board, once per
 # <dir>/inputs/*.bin, pulling each output to <dir>/board-pte/*.bin; then a
 # 100-execution timing run on the first input. Logs go to <dir>/board-pte/.
-# Files are staged in /tmp (RAM) and removed afterwards.
+# Files are staged in /tmp (RAM) and removed afterwards; REMOTE=<dir> stages
+# them elsewhere, e.g. on flash where /tmp would take RAM a model needs.
 # Build the runner first: scripts/dk cross scripts/build_rknn_runner.sh
 # (RUNNER=<path> picks another build, e.g. out/rknn-runner-xnnpack/executor_runner.stripped)
 # usage: tests/device/run_rknn_pte.sh out/mv2_rknn.pte out/mv2_rknn
@@ -11,7 +12,7 @@ root="$(cd "$(dirname "$0")/../.." && pwd)"
 pte="$1"
 dir="$(cd "$2" && pwd)"
 runner="${RUNNER:-$root/out/rknn-runner/executor_runner.stripped}"
-remote=/tmp/rknn-pte
+remote="${REMOTE:-/tmp/rknn-pte}"
 out="$dir/board-pte"
 
 [ -f "$runner" ] || { echo "missing $runner; run scripts/build_rknn_runner.sh" >&2; exit 1; }

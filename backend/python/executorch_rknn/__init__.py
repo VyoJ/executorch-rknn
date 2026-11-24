@@ -5,7 +5,15 @@ import executorch.kernels.quantized  # noqa: F401
 
 from .compile_specs import RknnOptions
 from .partitioner import RknnPartitioner
-from .passes import DuplicateQuantizePass, transform_passes
+from .passes import DuplicateQuantizePass, RemoveNoopExpandPass, ScaleBeforeBmmPass, transform_passes
 from .preprocess import RknnBackend
 
-__all__ = ["DuplicateQuantizePass", "RknnBackend", "RknnOptions", "RknnPartitioner", "transform_passes"]
+__all__ = [
+    "DuplicateQuantizePass",
+    "RemoveNoopExpandPass",
+    "RknnBackend",
+    "RknnOptions",
+    "RknnPartitioner",
+    "ScaleBeforeBmmPass",
+    "transform_passes",
+]

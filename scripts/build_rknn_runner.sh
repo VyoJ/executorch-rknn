@@ -2,6 +2,7 @@
 # Cross-compile executor_runner with RknnBackend (examples/runner) for the board.
 # Run inside the cross container: scripts/dk cross scripts/build_rknn_runner.sh
 # With XNNPACK=1, also link the XNNPACK backend (built in out/rknn-runner-xnnpack).
+# With PROFILE=1, record ETDump with XNNPACK operator times (--etdump_path; build dir -profile).
 set -e
 root="$(cd "$(dirname "$0")/.." && pwd)"
 
@@ -16,6 +17,12 @@ else
   xnnpack="-DEXECUTORCH_BUILD_XNNPACK=OFF -DEXECUTORCH_BUILD_PTHREADPOOL=OFF -DEXECUTORCH_BUILD_CPUINFO=OFF"
 fi
 
+devtools="-DEXECUTORCH_BUILD_DEVTOOLS=OFF"
+if [ "${PROFILE:-0}" = 1 ]; then
+  build="$build-profile"
+  devtools="-DEXECUTORCH_BUILD_DEVTOOLS=ON -DEXECUTORCH_ENABLE_EVENT_TRACER=ON"
+fi
+
 "$root/scripts/apply_patches.sh"
 
 # shellcheck disable=SC2086
@@ -27,7 +34,7 @@ cmake -S "$root/examples/runner" -B "$build" -G Ninja \
   -DEXECUTORCH_BUILD_PORTABLE_OPS=ON \
   -DEXECUTORCH_BUILD_KERNELS_QUANTIZED=ON \
   $xnnpack \
-  -DEXECUTORCH_BUILD_DEVTOOLS=OFF \
+  $devtools \
   -DEXECUTORCH_BUILD_TESTS=OFF \
   -DEXECUTORCH_ENABLE_LOGGING=ON
 
