@@ -16,8 +16,10 @@ CPU, and it classifies at 519 ms per image.
 | MobileNetV2, whole graph on the NPU | 10.6 ms | 0.600 (float 0.640) |
 | MobileViT-XS, NPU with the CPU on XNNPACK | 519 ms | 0.744 (float 0.712) |
 
-Same `.pte` files and binaries run on the Pico Mini B (RV1103, 64 MB RAM).
-More numbers in [docs/results.md](docs/results.md).
+The same `.pte` files and binaries run on the Pico Mini B (RV1103, 64 MB RAM)
+with bit-identical outputs: MobileNetV2 in 14.7 ms, MobileViT-XS in 556 ms
+([docs/rv1103.md](docs/rv1103.md)). More numbers in
+[docs/results.md](docs/results.md).
 
 ## Requirements
 

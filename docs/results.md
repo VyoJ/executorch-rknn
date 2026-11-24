@@ -17,7 +17,7 @@ per-channel weights, 50 calibration images). The whole graph is one delegate.
 | `rknn_run` alone, input already int8 | 9.04 ms | |
 | Plain RKNN application, float input quantised each run | 10.62 ms | |
 | Through ExecuTorch and the delegate | 10.64 ms | 0.600 |
-| Same `.pte`, Pico Mini B (RV1103) | 14.6 ms | 0.600 |
+| Same `.pte`, Pico Mini B (RV1103) | 14.7 ms | 0.600 |
 
 The delegate's outputs are bit-identical to running its `.rknn` directly.
 Peak RSS is 7.1 MB, plus 5.4 MB of NPU memory. Mean cosine of the logits
@@ -55,11 +55,12 @@ On the board, the QAT model gets 0.744 top-1 on 500 images (float 0.712, PT2E
 
 | Per image | Pico Pro Max | Pico Mini B |
 |---|---|---|
-| CPU part on portable kernels | 2,220 ms, 16.1 MB RSS | 2,155 ms, 14.9 MB RSS |
-| CPU part on XNNPACK | 519 ms, 14.5 MB RSS | 555 ms, 13.6 MB RSS |
+| CPU part on portable kernels | 2,220 ms, 16.1 MB RSS (before the passes) | 1,973 ms, 14.5 MB RSS |
+| CPU part on XNNPACK | 519 ms, 14.5 MB RSS | 556 ms, 13.6 MB RSS |
 
-The two CPU builds agree on the outputs (cosine 0.9994, same top-1 on 49 of
-50 images). Where the 519 ms goes, from an ETDump profile:
+Both boards give bit-identical outputs for the same `.pte`. The two CPU
+builds agree closely (cosine 0.9994, same top-1 on 49 of 50 images). Where
+the 519 ms goes, from an ETDump profile:
 
 | | ms |
 |---|---|
